@@ -35,6 +35,20 @@ about an old checkpoint has to be converted:
 - **Written with tuned Adam only**: resumes as before; `TunedAdamMixin` is still in gym-CDA.
 
 A resume cannot switch CBP on or off or change a setting: that is a fresh run, as it was before.
+So the config that resumes a CBP checkpoint lists `"cbp"` in `extensions_enabled` and repeats its
+settings, without the `cbp_` prefix, under `extension_settings.cbp` (gym-CDA reads the old group as
+those settings). For example, a checkpoint trained with `cbp_enabled: true` and
+`cbp_utility: "contribution"` resumes with:
+
+```json
+"extensions_enabled": ["cbp"],
+"extension_settings": {"cbp": {"utility": "contribution"}}
+```
+
+Checked on a real checkpoint written before the move (16 replacements, `utility` "contribution"):
+with the package and that config it resumed with the same per-unit ages and replacement count
+and kept replacing; without the package, or with a config that leaves out `"cbp"`, gym-CDA
+refused the resume and said why.
 
 ## Metrics
 
