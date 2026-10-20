@@ -26,10 +26,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from gym_continuousDoubleAuction.envs.continuousDoubleAuction_env import (
-    continuousDoubleAuctionEnv,
-)
-from gym_continuousDoubleAuction.train.model.cbp import (
+from cda_cbp.cbp import (
     CBPConfig,
     CBPLayerState,
     ReplaceableLayer,
@@ -42,30 +39,12 @@ from gym_continuousDoubleAuction.train.model.cbp import (
     select_and_replace,
     update_utility,
 )
-from gym_continuousDoubleAuction.train.model.cbp_learner import CBP_STATE, CBPLearnerMixin
+from cda_cbp.learner import CBP_STATE, CBPLearnerMixin
 from gym_continuousDoubleAuction.train.model.encoders import (
     ENCODER_REGISTRY,
     MLP_ENCODER_TYPE,
 )
-from gym_continuousDoubleAuction.train.model.model_handler import (
-    build_trainable_module_spec,
-)
-from gym_continuousDoubleAuction.train.model.moe_learner import CDAPPOTorchRLModule
-
-
-@pytest.fixture(scope="module")
-def spaces():
-    env = continuousDoubleAuctionEnv({})
-    agent_id = env.agents[0]
-    return env.get_observation_space(agent_id), env.get_action_space(agent_id)
-
-
-def build_module(spaces, encoder_type=MLP_ENCODER_TYPE, **kwargs):
-    obs_space, act_space = spaces
-    spec = build_trainable_module_spec(obs_space, act_space, encoder_type=encoder_type, **kwargs)
-    if spec.module_class is None:
-        spec.module_class = CDAPPOTorchRLModule
-    return spec.build()
+from conftest import build_module, cbp
 
 
 def simple_block(fan_in=6, units=5, fan_out=3):
@@ -610,7 +589,7 @@ class TestDevicePlacement:
         """
         import inspect
 
-        from gym_continuousDoubleAuction.train.model import cbp_learner
+        from cda_cbp import learner as cbp_learner
 
         source = inspect.getsource(cbp_learner.CBPLearnerMixin._cbp_attach)
         assert "device=layer.device" in source, (
@@ -620,7 +599,7 @@ class TestDevicePlacement:
     def test_a_layers_device_is_its_weights_device(self):
         """`layer.device` is what `_cbp_attach` reads, so it must be the weight's,
         for the Linear layers and for an LSTM's, whose unit is not a Linear row."""
-        from gym_continuousDoubleAuction.train.model.cbp import RecurrentLayer
+        from cda_cbp.cbp import RecurrentLayer
 
         linear = ReplaceableLayer(
             "l", nn.Linear(3, 4, device="meta"), [nn.Linear(4, 2, device="meta")]
@@ -638,7 +617,7 @@ class TestDevicePlacement:
         """
         import inspect
 
-        from gym_continuousDoubleAuction.train.model import cbp_learner
+        from cda_cbp import learner as cbp_learner
 
         source = inspect.getsource(cbp_learner.CBPLearnerMixin.build)
         assert "torch.Generator(device=self._cbp_device())" in source
@@ -647,7 +626,7 @@ class TestDevicePlacement:
         """The resampled row must be built from the weight, not from scratch."""
         import inspect
 
-        from gym_continuousDoubleAuction.train.model import cbp
+        from cda_cbp import cbp
 
         source = inspect.getsource(cbp._reinitialise)
         # `empty_like` inherits device and dtype from the weight; `torch.empty`
@@ -782,12 +761,12 @@ class TestAUnitIsJudgedOnEveryCallOfTheStep:
     def _probe(units=4):
         import torch.nn as nn
 
-        from gym_continuousDoubleAuction.train.model.cbp import (
+        from cda_cbp.cbp import (
             CBPConfig,
             CBPLayerState,
             ReplaceableLayer,
         )
-        from gym_continuousDoubleAuction.train.model.cbp_learner import CBPLearnerMixin
+        from cda_cbp.learner import CBPLearnerMixin
 
         mixin = CBPLearnerMixin.__new__(CBPLearnerMixin)
         mixin._cbp_config = CBPConfig(enabled=True)
@@ -855,7 +834,7 @@ class TestMeanCompensation:
 
     @staticmethod
     def _net(compensate):
-        from gym_continuousDoubleAuction.train.model import cbp as cbp_module
+        from cda_cbp import cbp as cbp_module
 
         torch.manual_seed(0)
         l1, act, l2 = nn.Linear(8, 16), nn.Tanh(), nn.Linear(16, 4)
@@ -907,22 +886,24 @@ class TestMeanCompensation:
         assert torch.all(layer.outgoing[0].weight[:, 0] == 0)
 
     def test_it_is_off_by_default_and_read_from_the_group(self):
-        from gym_continuousDoubleAuction.train.model.cbp import CBPConfig
+        from cda_cbp.cbp import CBPConfig
 
         assert CBPConfig().compensate_mean is False
         assert CBPConfig.from_dict({"cbp_compensate_mean": True}).compensate_mean is True
 
-    def test_it_reaches_the_learner_and_is_unrestorable_while_active(self):
-        from gym_continuousDoubleAuction.train.checkpoint import UNRESTORABLE_WHEN_ACTIVE_KEYS
+    def test_it_reaches_the_learner_and_is_unrestorable(self):
+        from gym_continuousDoubleAuction.train.checkpoint import _config_fingerprint
         from gym_continuousDoubleAuction.train.config import TrainConfig
         from gym_continuousDoubleAuction.train.train import build_config
 
-        assert TrainConfig().cbp_compensate_mean is False
-        assert "cbp_compensate_mean" in UNRESTORABLE_WHEN_ACTIVE_KEYS
-        cfg = TrainConfig(cbp_enabled=True, cbp_compensate_mean=True)
-        ppo = build_config(cfg)
-        ppo = ppo[0] if isinstance(ppo, tuple) else ppo
-        assert ppo.learner_config_dict["continual_backprop"]["cbp_compensate_mean"] is True
+        from cda_cbp.config import DEFAULTS
+        from cda_cbp.learner import _as_config
+
+        assert DEFAULTS["compensate_mean"] is False
+        ppo, _cb = build_config(TrainConfig(**cbp(compensate_mean=True)))
+        assert _as_config(ppo.learner_config_dict).compensate_mean is True
+        # Every resolved extension setting is fingerprinted, so a resume cannot change it.
+        assert _config_fingerprint(ppo)["ext.cbp.compensate_mean"] is True
 
 
 class TestContinualBackpropNeedsOneLearner:
@@ -936,22 +917,20 @@ class TestContinualBackpropNeedsOneLearner:
     def test_enabled_with_two_learners_is_refused_by_name(self):
         from gym_continuousDoubleAuction.train.config import TrainConfig
 
-        with pytest.raises(
-            ValueError, match=r"cbp_enabled.*num_learners|num_learners.*cbp_enabled"
-        ):
-            TrainConfig(cbp_enabled=True, num_learners=2)
+        with pytest.raises(ValueError, match=r"'cbp' with num_learners=2"):
+            TrainConfig(**cbp(), num_learners=2)
 
     @pytest.mark.parametrize("learners", [0, 1])
     def test_enabled_with_at_most_one_learner_is_fine(self, learners):
         from gym_continuousDoubleAuction.train.config import TrainConfig
 
-        TrainConfig(cbp_enabled=True, num_learners=learners)
+        TrainConfig(**cbp(), num_learners=learners)
 
     def test_measuring_only_with_many_learners_is_fine(self):
-        """`cbp_metrics_only` replaces nothing, so the replicas cannot diverge."""
+        """`metrics_only` replaces nothing, so the replicas cannot diverge."""
         from gym_continuousDoubleAuction.train.config import TrainConfig
 
-        TrainConfig(cbp_metrics_only=True, num_learners=2)
+        TrainConfig(**cbp(metrics_only=True), num_learners=2)
 
     def test_off_with_many_learners_is_fine(self):
         from gym_continuousDoubleAuction.train.config import TrainConfig
@@ -970,7 +949,7 @@ class TestDiscoveryMatchesTheRecordedLayers:
     FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "cbp_layers_f7c1353.json")
 
     def test_every_encoder_scope_and_sharing_matches(self, spaces):
-        from gym_continuousDoubleAuction.train.model.cbp import RecurrentLayer
+        from cda_cbp.cbp import RecurrentLayer
 
         with open(self.FIXTURE) as fh:
             recorded = json.load(fh)

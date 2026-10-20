@@ -1,22 +1,18 @@
-"""Integration tests for the Continual Backprop wiring.
+"""Continual Backprop inside a real gym-CDA `Algorithm`, enabled as an extension.
 
 The claims that only hold once a real `Algorithm` exists:
 
   1. **Composition preserves the encoder's learner.** CBP is an update rule, not
-     an architecture, so it is composed *over* whatever `learner_class_for`
+     an architecture, so gym-CDA composes it *over* whatever `learner_class_for`
      returned rather than competing for RLlib's single Learner slot. If that
      went wrong, selecting `jepa` with continual backprop on would silently drop
      the latent-prediction loss.
-  2. **Off is off.** With both switches false the resolved learner class is the
-     one a run would have had before any of this existed - not a subclass that
-     happens to do nothing.
+  2. **Off is off.** Without `"cbp"` in `extensions_enabled` the resolved learner
+     class is the plain one - not a subclass that happens to do nothing.
   3. **It runs inside a real PPO update**, replacing units and logging metrics,
      without breaking sampling, the league, or NAV conservation.
-  4. **The state survives a checkpoint**, and a checkpoint written before CBP
-     existed still restores.
-
-`TestOtherEncodersAreUnaffectedByJEPA` in `test_encoder_wiring.py` is the model
-for the isolation tests here.
+  4. **The state survives a checkpoint**, a checkpoint without CBP state still
+     restores, and a resume cannot switch CBP or change its settings.
 """
 
 import shutil
@@ -25,15 +21,11 @@ import tempfile
 import pytest
 import ray
 import torch
+from conftest import TEST_CFG, cbp
 
-from gym_continuousDoubleAuction.train.model.cbp_learner import (
-    CBP_STATE,
-    CBPLearnerMixin,
-    TunedAdamMixin,
-    with_continual_backprop,
-)
 from gym_continuousDoubleAuction.train.model.jepa_learner import CDAJEPALearner
 from gym_continuousDoubleAuction.train.model.moe_learner import CDAPPOTorchLearner
+from gym_continuousDoubleAuction.train.model.optim_learner import TunedAdamMixin
 from gym_continuousDoubleAuction.train.train import (
     TrainConfig,
     _learner_class,
@@ -41,32 +33,15 @@ from gym_continuousDoubleAuction.train.train import (
     build_config,
 )
 
-TEST_CFG = dict(
-    num_agents=4,
-    num_trained_agents=2,
-    max_step=64,
-    num_episodes_per_iter=2,
-    num_epochs=1,
-    minibatch_size=64,
-    num_env_runners=0,
-    num_learners=0,
-    num_gpus_per_learner=0,
-    episode_data_dir=None,
-    log_level="ERROR",
-    seed=7,
-)
+from cda_cbp.learner import CBP_STATE, CBPLearnerMixin
 
 #: The shipped replacement rate fires roughly once per 39 optimiser steps over
 #: 256 units, and a test-length run performs a handful - so at the real value
 #: nothing would be replaced and every assertion below would pass vacuously.
-#: Forced high here, which is exactly the manoeuvre docs/25's Finding 2 warns a
+#: Forced high here, which is exactly the manoeuvre the docs' Finding 2 warns a
 #: real run cannot make.
-FIRING_CFG = dict(
-    cbp_enabled=True,
-    cbp_replacement_rate=0.05,
-    cbp_maturity_threshold=1,
-    cbp_metrics_every_n_updates=1,
-)
+FIRING = dict(replacement_rate=0.05, maturity_threshold=1, metrics_every_n_updates=1)
+FIRING_CFG = cbp(**FIRING)
 
 
 class TestCompositionPreservesTheEncodersLearner:
@@ -82,17 +57,24 @@ class TestCompositionPreservesTheEncodersLearner:
         cfg.encoder_type = "jepa"
         assert _learner_class(cfg) is CDAJEPALearner
 
-    @pytest.mark.parametrize("base", [CDAPPOTorchLearner, CDAJEPALearner], ids=["moe", "jepa"])
-    def test_the_loss_still_comes_from_the_base(self, base):
+    @pytest.mark.parametrize(
+        "encoder_type, base", [("mlp", CDAPPOTorchLearner), ("jepa", CDAJEPALearner)]
+    )
+    def test_the_loss_still_comes_from_the_base(self, encoder_type, base):
         """The MoE and JEPA terms must survive the composition.
 
         `compute_loss_for_module` is where both live; the mixin overrides the
         update path and the checkpoint, and must leave the loss alone.
         """
-        composed = with_continual_backprop(base)
+        composed = _learner_class(TrainConfig(**TEST_CFG, **FIRING_CFG, encoder_type=encoder_type))
         assert composed.compute_loss_for_module is base.compute_loss_for_module
         assert CBPLearnerMixin in composed.__mro__
         assert composed.__mro__.index(CBPLearnerMixin) < composed.__mro__.index(base)
+
+    def test_cbp_wraps_outermost(self):
+        """`learner_order` puts CBP ahead of every other mixin, as it was in gym-CDA."""
+        composed = _learner_class(TrainConfig(**TEST_CFG, **FIRING_CFG))
+        assert composed.__mro__[1] is CBPLearnerMixin
 
     def test_cbp_on_with_jepa_keeps_the_jepa_learner(self):
         cfg = TrainConfig(**TEST_CFG, **FIRING_CFG)
@@ -111,9 +93,11 @@ class TestTunedAdamComposesWithCBP:
         assert CBPLearnerMixin in composed.__mro__
         assert TunedAdamMixin in composed.__mro__
 
-    def test_the_config_dict_carries_both_groups(self):
-        values = _learner_config_dict(TrainConfig(**TEST_CFG))
-        assert set(values) == {"optimizer", "continual_backprop"}
+    def test_the_config_dict_carries_the_resolved_settings(self):
+        values = _learner_config_dict(TrainConfig(**TEST_CFG, **FIRING_CFG))
+        settings = values["extensions"]["extension_settings"]["cbp"]
+        assert settings["replacement_rate"] == FIRING["replacement_rate"]
+        assert settings["utility"] == "overall"  # a default, filled in
         assert values["optimizer"]["adam_betas"] == [0.9, 0.999]
 
 
@@ -221,7 +205,7 @@ class TestCBPOnTheLSTMCore:
     @classmethod
     def setup_class(cls):
         ray.init(ignore_reinit_error=True, include_dashboard=False, log_to_driver=False, num_cpus=2)
-        cls.cfg = TrainConfig(**TEST_CFG, **FIRING_CFG, encoder_type="lstm", cbp_scope="recurrent")
+        cls.cfg = TrainConfig(**TEST_CFG, **cbp(**FIRING, scope="recurrent"), encoder_type="lstm")
         ppo_config, _cb = build_config(cls.cfg)
         cls.algo = ppo_config.build_algo()
         cls.result = cls.algo.train()
@@ -291,11 +275,12 @@ class TestMetricsOnlyChangesNothing:
         ray.init(ignore_reinit_error=True, include_dashboard=False, log_to_driver=False, num_cpus=2)
         cfg = TrainConfig(
             **TEST_CFG,
-            cbp_enabled=True,
-            cbp_metrics_only=True,
-            cbp_replacement_rate=0.5,
-            cbp_maturity_threshold=0,
-            cbp_metrics_every_n_updates=1,
+            **cbp(
+                metrics_only=True,
+                replacement_rate=0.5,
+                maturity_threshold=0,
+                metrics_every_n_updates=1,
+            ),
         )
         ppo_config, _cb = build_config(cfg)
         cls.algo = ppo_config.build_algo()
@@ -501,15 +486,13 @@ class TestCBPSurvivesARealSaveAndRestore:
 
 
 class TestRestoreCannotChangeCBP:
-    """Changing these alongside `is_restore` must raise, not silently do nothing.
+    """Changing CBP alongside `is_restore` must raise, not silently do nothing.
 
     `Algorithm.from_checkpoint` rebuilds from the config stored in the
-    checkpoint, so the `learner_class` and `learner_config_dict` assembled for
-    the new run are used only for this comparison and never take effect. Before
-    this check, turning continual backprop on alongside a resume produced a run
-    that looked exactly like one honouring it: no metric, no warning, no
-    mechanism. The weights would restore perfectly well - which is why this is
-    a separate category from the structural keys rather than one of them.
+    checkpoint, so the Learner class and settings assembled for the new run are
+    used only for this comparison and never take effect. gym-CDA's extension
+    point fingerprints the enabled set and every resolved setting
+    (`ext.cbp.<key>`), so turning CBP on, or retuning it, on a resume raises.
     """
 
     @staticmethod
@@ -520,124 +503,33 @@ class TestRestoreCannotChangeCBP:
     def test_enabling_cbp_on_a_restore_raises(self):
         from gym_continuousDoubleAuction.train.train import _check_restored_config
 
-        with pytest.raises(ValueError, match="cbp_enabled"):
-            _check_restored_config(self._config(), self._config(cbp_enabled=True))
-
-    def test_enabling_metrics_only_on_a_restore_raises(self):
-        from gym_continuousDoubleAuction.train.train import _check_restored_config
-
-        with pytest.raises(ValueError, match="cbp_metrics_only"):
-            _check_restored_config(self._config(), self._config(cbp_metrics_only=True))
-
-    def test_retuning_adam_on_a_restore_raises(self):
-        from gym_continuousDoubleAuction.train.train import _check_restored_config
-
-        with pytest.raises(ValueError, match="adam_betas"):
-            _check_restored_config(self._config(), self._config(adam_betas=[0.99, 0.99]))
+        with pytest.raises(ValueError, match="extensions_enabled"):
+            _check_restored_config(self._config(), self._config(**cbp()))
 
     def test_the_error_says_the_weights_are_fine(self):
-        """The distinction from a structural mismatch has to survive the message.
-
-        A reader who sees "cannot restore" and assumes the checkpoint is
-        unusable would throw away a perfectly good one.
-        """
+        """A reader who sees "cannot restore" must not throw away a good checkpoint."""
         from gym_continuousDoubleAuction.train.train import _check_restored_config
 
         with pytest.raises(ValueError) as excinfo:
-            _check_restored_config(self._config(), self._config(cbp_enabled=True))
+            _check_restored_config(self._config(), self._config(**cbp()))
         assert "weights would restore fine" in str(excinfo.value)
 
     def test_changing_the_rate_while_cbp_runs_raises(self):
         from gym_continuousDoubleAuction.train.train import _check_restored_config
 
-        with pytest.raises(ValueError, match="cbp_replacement_rate"):
-            _check_restored_config(
-                self._config(cbp_enabled=True),
-                self._config(cbp_enabled=True, cbp_replacement_rate=0.5),
-            )
+        with pytest.raises(ValueError, match="ext.cbp.replacement_rate"):
+            _check_restored_config(self._config(**cbp()), self._config(**cbp(replacement_rate=0.5)))
 
-    def test_changing_a_tuning_knob_while_cbp_is_off_is_allowed(self):
-        """It describes something that was not going to happen either way.
-
-        Failing a resume over a knob with no effect would be noise, and noise in
-        a guard is how guards get switched off.
-        """
+    def test_settings_of_a_disabled_extension_are_ignored(self):
+        """They describe something that was not going to happen either way."""
         from gym_continuousDoubleAuction.train.train import _check_restored_config
 
-        _check_restored_config(self._config(), self._config(cbp_replacement_rate=0.5))
+        _check_restored_config(
+            self._config(), self._config(extension_settings={"cbp": {"replacement_rate": 0.5}})
+        )
 
     def test_an_unchanged_config_restores_cleanly(self):
         from gym_continuousDoubleAuction.train.train import _check_restored_config
 
         _check_restored_config(self._config(), self._config())
-        _check_restored_config(self._config(cbp_enabled=True), self._config(cbp_enabled=True))
-
-    def test_a_checkpoint_predating_the_groups_still_raises(self):
-        """The case that made the naive fix hollow.
-
-        Every checkpoint written before these groups existed carries none of
-        these keys, and `_check_restored_config` only reports keys present in
-        *both* fingerprints. Comparing against the intersection would therefore
-        skip them on exactly the checkpoints most likely to be resumed - at the
-        time of writing, all of them.
-        """
-        from gym_continuousDoubleAuction.train.train import _check_restored_config
-
-        old = self._config()
-        # Strip the groups, as a pre-feature checkpoint's config has them.
-        old.learner_config_dict = {}
-
-        _check_restored_config(old, self._config())  # defaults: still fine
-        with pytest.raises(ValueError, match="cbp_enabled"):
-            _check_restored_config(old, self._config(cbp_enabled=True))
-
-    def test_the_key_tables_cannot_drift_apart(self):
-        """Every unrestorable key needs a pre-feature value, and vice versa.
-
-        `PRE_FEATURE_BEHAVIOUR` is indexed unguarded in `_check_restored_config`,
-        so a key added to either tuple and not to it is a KeyError on the next
-        restore - raised from the guard itself, which is the worst place for one.
-        """
-        from gym_continuousDoubleAuction.train.train import (
-            PRE_FEATURE_BEHAVIOUR,
-            UNRESTORABLE_CONFIG_KEYS,
-            UNRESTORABLE_WHEN_ACTIVE_KEYS,
-        )
-
-        declared = set(UNRESTORABLE_CONFIG_KEYS) | set(UNRESTORABLE_WHEN_ACTIVE_KEYS)
-        assert declared == set(PRE_FEATURE_BEHAVIOUR)
-
-    def test_a_learner_config_key_colliding_with_an_algorithm_key_raises(self):
-        """The groups are flattened into one namespace, so a name can collide.
-
-        `_config_fingerprint` drops the group name, which is why every key in
-        these two groups carries a `cbp_` or `adam_` prefix. Nothing enforced
-        that: a future group with a bare `num_epochs` would have silently
-        overwritten the AlgorithmConfig entry of the same name, and the
-        divergence check would then have waved through a real change to it -
-        the one failure this whole function exists to prevent.
-        """
-        from gym_continuousDoubleAuction.train.train import _config_fingerprint
-
-        config = self._config()
-        config.learner_config_dict = dict(config.learner_config_dict)
-        config.learner_config_dict["careless_group"] = {"num_epochs": 999}
-
-        with pytest.raises(ValueError, match="collides"):
-            _config_fingerprint(config)
-
-    def test_the_shipped_defaults_are_the_pre_feature_behaviour(self):
-        """A fresh config must never trip the guard against an old checkpoint.
-
-        If a shipped default ever diverges from what a pre-feature run did, then
-        resuming any existing checkpoint without touching the config would fail
-        - a guard firing on the one case it is meant to wave through.
-        """
-        from gym_continuousDoubleAuction.train.train import PRE_FEATURE_BEHAVIOUR
-
-        cfg = TrainConfig()
-        for key, expected in PRE_FEATURE_BEHAVIOUR.items():
-            actual = getattr(cfg, key)
-            if isinstance(actual, list):
-                actual = tuple(actual)
-            assert actual == expected, key
+        _check_restored_config(self._config(**cbp()), self._config(**cbp()))

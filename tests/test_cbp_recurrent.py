@@ -26,8 +26,8 @@ import torch.nn as nn
 from gym_continuousDoubleAuction.envs.continuousDoubleAuction_env import (
     continuousDoubleAuctionEnv,
 )
-from gym_continuousDoubleAuction.test.test_cbp import build_module
-from gym_continuousDoubleAuction.train.model.cbp import (
+from conftest import build_module
+from cda_cbp.cbp import (
     SCOPES,
     CBPConfig,
     CBPLayerState,
@@ -36,7 +36,7 @@ from gym_continuousDoubleAuction.train.model.cbp import (
     select_and_replace,
     update_utility,
 )
-from gym_continuousDoubleAuction.train.model.cbp_learner import CBPLearnerMixin
+from cda_cbp.learner import CBPLearnerMixin
 
 H, N_IN, N_OUT, LAYERS = 4, 5, 3, 2
 
