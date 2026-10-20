@@ -8,7 +8,7 @@ cda_cbp/config.py     DEFAULTS and validate (the `cbp` settings block)
 cda_cbp/cbp.py        the algorithm; imports no RLlib, so the formulas test without an Algorithm
 cda_cbp/learner.py    CBPLearnerMixin: hooks, apply_gradients, metrics, get/set_state
 tests/                pytest; `python -m pytest -q`
-ci/cda_cbp.yml        CI, until it is moved to .github/workflows/
+.github/workflows/cda_cbp.yml  CI
 ```
 
 ## Install for development
@@ -46,4 +46,4 @@ This package relies on gym-CDA for:
   `CBPLearnerMixin` to this package's, so checkpoints written while CBP was part of gym-CDA
   still load.
 
-The gym-CDA ref CI tests against is `GYM_CDA_REF` in `ci/cda_cbp.yml`.
+The gym-CDA ref CI tests against is `GYM_CDA_REF` in `.github/workflows/cda_cbp.yml`.

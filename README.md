@@ -62,7 +62,7 @@ migration and development.
 ## Compatibility
 
 Needs a gym-CDA with `learner_order` in its extension point and `train/model/layout.py`. CI tests
-against the ref in [ci/cda_cbp.yml](ci/cda_cbp.yml).
+against the ref in [.github/workflows/cda_cbp.yml](.github/workflows/cda_cbp.yml).
 
 ## License
 
