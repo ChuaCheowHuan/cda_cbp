@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cda-cbp"
+version = "0.1.0"
+description = "Continual Backprop for gym-continuousDoubleAuction, as an installable training extension."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+# gym-CDA is not on PyPI: install it first (see README). It must carry the
+# extension point with `learner_order` and `train/model/layout.py`.
+dependencies = ["gym_continuousDoubleAuction>=2.0,<3"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.entry-points."gym_cda.extensions"]
+cbp = "cda_cbp:EXTENSION"
+
+[tool.setuptools]
+packages = ["cda_cbp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.format]
+quote-style = "preserve"

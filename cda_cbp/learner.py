@@ -1,39 +1,24 @@
 """Wiring Continual Backprop into RLlib's Learner.
 
-The algorithm is in `cbp.py`; this file is only the plumbing, and there are
-four pieces of it:
+The algorithm is in `cbp.py`; this file is only the plumbing:
 
-  CBPLearnerMixin        - registers forward hooks to observe hidden
-                           activations, runs generate-and-test after each
-                           optimiser step, logs the plasticity correlates, and
-                           carries its own state through a checkpoint.
-  with_continual_backprop - composes the mixin over whatever Learner the
-                           configured encoder selected.
-  TunedAdamMixin         - the papers' tuned Adam, opt-in; it lives in
-                           `optim_learner` and is re-exported here.
-  learner_config         - reads the config group off the AlgorithmConfig.
+  CBPLearnerMixin - registers forward hooks to observe hidden activations,
+                    runs generate-and-test after each optimiser step, logs the
+                    plasticity correlates, and carries its own state through a
+                    checkpoint.
+  _as_config      - reads the settings off the AlgorithmConfig: the `cbp`
+                    extension's, or the legacy group of a checkpoint written
+                    while CBP was part of gym-CDA.
 
-Why a mixin, and not another registry entry
--------------------------------------------
-Every previous extension to the learning stack - the MoE load-balancing loss,
-the JEPA latent-prediction loss - went through `encoders/`, whose `@register`
-takes a `learner_class_path`. Continual Backprop must not, for three reasons
-developed in `docs/25_continual_backprop.md` section 2.5:
-
-  * `encoder_type: "mlp"` is a pass-through that never reaches `CDACatalog`, so
-    an encoder-registry mechanism would be unavailable for the shipped default
-    - which is the 2x256 tanh network the papers' Continual PPO used, and the
-    configuration most at risk from the saturation CBP targets.
-  * `learner_class_for` fills RLlib's single algorithm-wide Learner slot from
-    the *configured encoder*. A CBP learner registered against an
-    `encoder_type` would be mutually exclusive with `jepa` rather than
-    composable with it.
-  * Resetting Adam's moments for replaced units needs the optimiser, which only
-    the Learner can see.
-
-So CBP composes *over* the encoder's learner instead of occupying its slot. The
-MoE and JEPA terms are inherited untouched, and when CBP is off the composition
-is skipped entirely, so the resolved class is identical to today's.
+Why a Learner mixin
+-------------------
+gym-CDA composes an extension's Learner mixin *over* the Learner its encoder
+selected (`extensions.compose_learner`), so the MoE and JEPA loss terms are
+inherited untouched and CBP works with every encoder, including the stock
+`mlp` that never reaches gym-CDA's encoder registry. Resetting Adam's moments
+for replaced units needs the optimiser, which only the Learner can see. The
+extension declares the highest `learner_order` so it wraps every other mixin,
+as it did when it was part of gym-CDA (docs/continual_backprop.md section 2.5).
 
 Where the step fires
 --------------------
@@ -58,13 +43,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 
 from gym_continuousDoubleAuction.logging_setup import get_logger
+from gym_continuousDoubleAuction.train.extensions import EXTENSIONS_CONFIG_KEY, settings_for
 
-# `TunedAdamMixin` lives in `optim_learner`. It is imported here under its old
-# name on purpose: checkpoints written before the move pickle their Learner
-# class with a reference to `cbp_learner.TunedAdamMixin`, and they must keep
-# loading (test_learner_class_compat.py).
-from gym_continuousDoubleAuction.train.model.optim_learner import TunedAdamMixin
-from gym_continuousDoubleAuction.train.model.cbp import (
+from cda_cbp import config as cbp_settings
+from cda_cbp.cbp import (
     CBPConfig,
     CBPLayerState,
     ReplaceableLayer,
@@ -82,8 +64,10 @@ logger = get_logger(__name__)
 #: Key under which CBP's state rides in the Learner's checkpoint.
 CBP_STATE = "continual_backprop"
 
-#: Key under which the config group rides on `learner_config_dict`.
-CBP_CONFIG_KEY = "continual_backprop"
+#: Key under which gym-CDA's own CBP config group rode on `learner_config_dict`
+#: before CBP moved into this package. A checkpoint written then still carries
+#: it, and its pickled Learner class resolves to `CBPLearnerMixin` below.
+LEGACY_CONFIG_KEY = "continual_backprop"
 
 #: Metric names, logged per module. Prefixed so they do not collide with the
 #: MoE and JEPA metrics a composed learner also emits.
@@ -97,17 +81,27 @@ _RANK_SAMPLE_ROWS = 1024
 
 
 def _as_config(learner_config_dict: Optional[Dict[str, Any]]) -> CBPConfig:
-    """The CBP settings carried on the AlgorithmConfig, or the off default."""
-    values = (learner_config_dict or {}).get(CBP_CONFIG_KEY)
-    return CBPConfig.from_dict(values)
+    """The CBP settings carried on the AlgorithmConfig, or the off default.
+
+    A run that enabled the `cbp` extension carries them in gym-CDA's
+    `extensions` group. A checkpoint written while CBP was part of gym-CDA
+    carries the legacy `continual_backprop` group instead; reading it keeps such
+    a run's CBP on, with the same settings, when it is resumed.
+    """
+    lcd = learner_config_dict or {}
+    group = lcd.get(EXTENSIONS_CONFIG_KEY) or {}
+    if cbp_settings.NAME in (group.get("extensions_enabled") or ()):
+        return cbp_settings.to_cbp_config(settings_for(lcd, cbp_settings.NAME))
+    return CBPConfig.from_dict(lcd.get(LEGACY_CONFIG_KEY))
 
 
 class CBPLearnerMixin:
     """Continual Backprop, composed over any PPO Learner.
 
-    Inert unless `cbp_enabled` or `cbp_metrics_only` is set: `build` returns
-    early, no hook is registered, and `apply_gradients` adds one attribute
-    lookup to the update path.
+    Composed over the Learner by gym-CDA when `"cbp"` is in
+    `extensions_enabled`. Inert if its settings resolve to off (only possible
+    for a legacy checkpoint): `build` returns early, no hook is registered, and
+    `apply_gradients` adds one attribute lookup to the update path.
     """
 
     # --- Setup ---------------------------------------------------------------
@@ -403,18 +397,3 @@ class CBPLearnerMixin:
             for name, layer_state in layers.items():
                 if name in saved:
                     layer_state.set_state(saved[name])
-
-
-def with_continual_backprop(base, tuned_adam: bool = False):
-    """Compose the mixins over a Learner class.
-
-    The mixins come first in the MRO so their `apply_gradients`, `get_state`
-    and `configure_optimizers_for_module` run, while `compute_loss_for_module`
-    still resolves to `base` - which is what keeps the MoE load-balancing term
-    and the JEPA latent-prediction term intact for a run that selected one of
-    those encoders.
-    """
-    mixins = (CBPLearnerMixin,)
-    if tuned_adam:
-        mixins = mixins + (TunedAdamMixin,)
-    return type(f"CBP{base.__name__}", mixins + (base,), {})
