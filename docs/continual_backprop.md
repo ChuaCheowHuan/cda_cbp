@@ -1,19 +1,34 @@
-# 25. Continual Backprop: What It Is and How It Could Serve This Project
+# Continual Backprop: What It Is and How It Serves gym-CDA
+
+> **Moved from gym-CDA.** This was gym-CDA's `docs/25_continual_backprop.md` until CBP moved into
+> this package; its history came with it. It is kept as written, so three things read differently
+> now:
+>
+> - **Settings.** It names gym-CDA's old keys, `cbp_<key>` (for example `cbp_replacement_rate`). In
+>   this package the same setting is `<key>` under `extension_settings["cbp"]`, and setting
+>   `cbp_enabled: true` is now listing `"cbp"` in `extensions_enabled`
+>   ([settings.md](settings.md), [migration.md](migration.md)).
+> - **Code.** `cbp.py` and `cbp_learner.py` are [`cda_cbp/cbp.py`](../cda_cbp/cbp.py) and
+>   [`cda_cbp/learner.py`](../cda_cbp/learner.py). gym-CDA composes the mixin through its extension
+>   point rather than `with_continual_backprop`, and tuned Adam (`TunedAdamMixin`) stayed in gym-CDA
+>   (`train/model/optim_learner.py`). Discovery reads trunks through gym-CDA's
+>   `train/model/layout.py`.
+> - **Links.** Numbered docs are gym-CDA's and link there. Metric names (`cbp_*`) are unchanged.
 
 It asks one question: **does Continual Backprop — backprop plus the continual, selective
 reinitialization of low-utility hidden units — have anything to offer a league-based self-play
 trainer whose opponents change under it by construction?**
 
 The answer is a qualified yes, and the qualification is different from the one in
-[22_jepa_integration.md](22_jepa_integration.md). JEPA was a good fit for *this observation* and a
+[22_jepa_integration.md](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/22_jepa_integration.md). JEPA was a good fit for *this observation* and a
 poor fit for *this reward*. Continual Backprop is a good fit for *this training regime* and,
 now that it has been measured in it, is a fix for a problem this system does not yet have: at
 ~20,000 optimiser steps the effect is not detectable (§3.3).
 
 **Status.** This began as a research note and is now also a description of shipped code and of a
 measurement that has been taken. §4.1 (instrumentation) and §4.2 (the mechanism) are implemented,
-off by default, in [`train/model/cbp.py`](../gym_continuousDoubleAuction/train/model/cbp.py) and
-[`cbp_learner.py`](../gym_continuousDoubleAuction/train/model/cbp_learner.py); §4.3 and §4.4 are
+off by default, in [`train/model/cbp.py`](../cda_cbp/cbp.py) and
+[`cbp_learner.py`](../cda_cbp/learner.py); §4.3 and §4.4 are
 not.
 
 **The measurement has now been run, and the answer is that the effect is not detectable here** at
@@ -26,13 +41,13 @@ It also differs from every previous extension in one structural way that decides
 **Continual Backprop is not an encoder, and it must not be wired through the encoder registry.**
 §2.5 is that argument, and it is the most load-bearing section in this note.
 
-Related: [08_self_play_league.md](08_self_play_league.md) (the non-stationarity this exploits),
-[02_architecture.md](02_architecture.md) §2.5 (the step lifecycle),
-[18_configuration.md](18_configuration.md) §5.4 (the encoder group and the comparison protocol),
-[23_probe_harness.md](23_probe_harness.md) (the reward-free measurement this needs),
-[10_testing.md](10_testing.md) §6.4 (the contract a new component must meet),
-[29_fixed_issues.md](29_fixed_issues.md) (S1-1, S1-3),
-[12_perspective_rl_researcher.md](12_perspective_rl_researcher.md) §9.
+Related: [08_self_play_league.md](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/08_self_play_league.md) (the non-stationarity this exploits),
+[02_architecture.md](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/02_architecture.md) §2.5 (the step lifecycle),
+[18_configuration.md](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/18_configuration.md) §5.4 (the encoder group and the comparison protocol),
+[23_probe_harness.md](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/23_probe_harness.md) (the reward-free measurement this needs),
+[10_testing.md](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/10_testing.md) §6.4 (the contract a new component must meet),
+[29_fixed_issues.md](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/29_fixed_issues.md) (S1-1, S1-3),
+[12_perspective_rl_researcher.md](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/12_perspective_rl_researcher.md) §9.
 
 ---
 
@@ -172,7 +187,7 @@ phenomenon of **continual** learning — of a task distribution that keeps chang
 RL benchmarks have to manufacture that with task sequences. This project produces it as a direct
 consequence of its own design:
 
-From [08_self_play_league.md](08_self_play_league.md) and the `league_self_play` group:
+From [08_self_play_league.md](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/08_self_play_league.md) and the `league_self_play` group:
 
 | Knob | Shipped value | What it does to the data distribution |
 |---|---|---|
@@ -182,8 +197,8 @@ From [08_self_play_league.md](08_self_play_league.md) and the `league_self_play`
 
 So the opponents a learner faces are **resampled from a pool that keeps turning over**, and each
 new champion is a snapshot of a policy that has itself moved. The observation distribution, the
-book dynamics, and the reward-generating process all shift with it. [12](12_perspective_rl_researcher.md)
-§9 and [18](18_configuration.md) §5.4 already note that this non-stationarity is why
+book dynamics, and the reward-generating process all shift with it. [12](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/12_perspective_rl_researcher.md)
+§9 and [18](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/18_configuration.md) §5.4 already note that this non-stationarity is why
 `vf_share_layers` is `false` — the project has *already* made one architectural decision on exactly
 these grounds.
 
@@ -208,7 +223,7 @@ From the `ppo` group:
 "vf_share_layers": false
 ```
 
-Which builds exactly that, separate trunks included ([16](16_verification_log.md) §16.14):
+Which builds exactly that, separate trunks included ([16](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/16_verification_log.md) §16.14):
 
 ```
 encoder.actor_encoder.net.mlp.0: Linear 193->256    encoder.critic_encoder.net.mlp.0: Linear 193->256
@@ -241,7 +256,7 @@ for every encoder.
 
 ### 2.3 The budget this project needs is the regime where plasticity loss appears
 
-[22](22_jepa_integration.md) §2.3 records the gap: the default budget is ~262k env steps
+[22](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/22_jepa_integration.md) §2.3 records the gap: the default budget is ~262k env steps
 (`num_iters: 16`) against a realistic need of 10⁷–10⁸. Plasticity loss is a *long-run* failure. It
 does not show up in 16 iterations, and it is precisely what degrades a run that has been scaled up
 to the length this project knows it needs.
@@ -255,7 +270,7 @@ off exactly when the expensive runs start.
 
 This is the reason CBP can be evaluated *here* when it could not be evaluated in most codebases.
 
-[23_probe_harness.md](23_probe_harness.md) freezes an encoder and fits a ridge readout from its
+[23_probe_harness.md](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/23_probe_harness.md) freezes an encoder and fits a ridge readout from its
 latents to a future public microstructure quantity, scored held out. No policy, no reward, no value
 function. The claim CBP makes is "the network retains the ability to learn", and the probe measures
 something very close to its observable consequence: *how much the representation still makes
@@ -328,9 +343,9 @@ the MoE term, the JEPA term and CBP all survive together, and every existing enc
 exactly what it resolves to today when CBP is off. This is the same isolation property
 `jepa` was held to, obtained a different way because the mechanism is a different *kind* of thing.
 
-As shipped, in `_learner_class` ([`train/build.py`](../gym_continuousDoubleAuction/train/build.py))
+As shipped, in `_learner_class` ([`train/build.py`](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/gym_continuousDoubleAuction/train/build.py))
 and `with_continual_backprop`
-([`cbp_learner.py`](../gym_continuousDoubleAuction/train/model/cbp_learner.py)):
+([`cbp_learner.py`](../cda_cbp/learner.py)):
 
 ```mermaid
 flowchart LR
@@ -361,7 +376,7 @@ flowchart LR
 The mixin sits ahead of the base in the MRO, so `apply_gradients`, `get_state` and
 `configure_optimizers_for_module` resolve to it while `compute_loss_for_module` still resolves to
 the base. That is what keeps the MoE and JEPA loss terms. `TunedAdamMixin` composes the same way,
-on its own or alongside CBP (§5.6 of [18](18_configuration.md)).
+on its own or alongside CBP (§5.6 of [18](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/18_configuration.md)).
 
 **Which hook it composes onto is settled in §3.1, not here, and the answer is not the one this
 section originally gave.** The first draft argued for `after_gradient_based_update` — confirmed
@@ -373,7 +388,7 @@ section's argument depends on which of the two it is: both are methods on the Le
 the claim being made.
 
 **[verified]** The composition was measured rather than assumed — see
-[16](16_verification_log.md) §16.13. Composing the mixin over `CDAPPOTorchLearner` and over
+[16](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/16_verification_log.md) §16.13. Composing the mixin over `CDAPPOTorchLearner` and over
 `CDAJEPALearner` leaves `compute_loss_for_module` resolving to the base learner in both cases, so
 the MoE and JEPA terms survive, while the generate-and-test hook resolves to the mixin's.
 
@@ -419,7 +434,7 @@ available for anyone who wants to measure the difference.
 
 ### 3.2 Preserved plasticity, in a reward that pays for passivity, preserves the ability to learn nothing
 
-> **Status.** S1-1 and S1-3 are fixed ([S1-1](29_fixed_issues.md#s1-1--ppos-critic-receives-zero-gradient-verified-fixed), [S1-3](29_fixed_issues.md#s1-3--doing-nothing-is-a-dominant-strategy-verified-fixed); what they were is in [29](29_fixed_issues.md#25-32--the-reward-paid-for-passivity)). This
+> **Status.** S1-1 and S1-3 are fixed ([S1-1](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/29_fixed_issues.md#s1-1--ppos-critic-receives-zero-gradient-verified-fixed), [S1-3](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/29_fixed_issues.md#s1-3--doing-nothing-is-a-dominant-strategy-verified-fixed); what they were is in [29](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/29_fixed_issues.md#25-32--the-reward-paid-for-passivity)). This
 > section was written while they stood. Its argument still applies to any reward that pays for
 > passivity, and it is why the comparisons below are probe-scored first.
 
@@ -440,7 +455,7 @@ run, and the probe remains the cheaper first measurement.
 
 This section used to say the question was unknown. It has now been asked, with
 `cbp_metrics_only: true`, and the answer at this scale is no. Full numbers in
-[16](16_verification_log.md) §16.16; the short form:
+[16](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/16_verification_log.md) §16.16; the short form:
 
 | | optimiser steps | effective rank |
 |---|---|---|
@@ -468,7 +483,7 @@ there is nothing here yet for the mechanism to fix, and switching it on would be
 patient who is not ill.
 
 Shipping the mechanism before measuring the disease would have been backwards, which is the
-mistake [22](22_jepa_integration.md) avoided by putting a pure instrument first. §4.1 did the
+mistake [22](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/22_jepa_integration.md) avoided by putting a pure instrument first. §4.1 did the
 same — and §3.8 is what happened when the instrument itself turned out to need one.
 
 ### 3.4 "Unit" is unambiguous in some places in this codebase and not in others
@@ -496,7 +511,7 @@ under `cbp_scope: "feedforward"`: that encoder's tokenizer is `token_mlp` and it
 fixes it, rather than running a no-op. Attention is explicitly excluded and should be documented as
 excluded, not silently skipped.
 
-**`cbp_scope: "recurrent"` adds the LSTM core** ([S3-32](29_fixed_issues.md#s3-32--continual-backprop-a-silent-no-op-on-lstm-and-its-state-in-every-weight-sync-verified-fixed)), and finds 2 layers per trainable
+**`cbp_scope: "recurrent"` adds the LSTM core** ([S3-32](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/29_fixed_issues.md#s3-32--continual-backprop-a-silent-no-op-on-lstm-and-its-state-in-every-weight-sync-verified-fixed)), and finds 2 layers per trainable
 module in `lstm` (the actor's and the critic's; 1 under `vf_share_layers`) and exactly what
 `feedforward` finds everywhere else. PyTorch stacks an LSTM's four gates, so a unit's parameters are
 scattered, and the split that makes a replacement safe is:
@@ -522,7 +537,7 @@ What it does not cover or does not do:
   batches to a fixed sequence length and the loss masks the padding; the utility does not. How many
   padded rows enter, and what that does to the ranking, was not measured.
 - **Recurrent CBP runs through a league.** The league failure on `lstm` that this change surfaced
-  (issue #278, independent of CBP) is fixed in `train/model/action_dist.py` ([29](29_fixed_issues.md#25-34--a-league-run-on-lstm-failed-once-a-champion-existed)).
+  (issue #278, independent of CBP) is fixed in `train/model/action_dist.py` ([29](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/29_fixed_issues.md#25-34--a-league-run-on-lstm-failed-once-a-champion-existed)).
 - **Nothing here says CBP helps a recurrent policy.** The papers do not test one, and the
   measurement in §3.3 (not detectable at this repo's update count) applies unchanged. This makes the
   mechanism *possible* on `lstm`, which it was not.
@@ -609,7 +624,7 @@ a changed config. That is the whole envelope the bugs lived outside of.
 |---|---|
 | GPU | CBP state allocated on the CPU while the module had already been moved to CUDA by `super().build()`. `h - f̂` raises on the first forward pass of any GPU run |
 | GPU, later | A CPU `torch.Generator` filling a CUDA tensor. Does not raise at build time — only when the accumulator first crosses 1.0, tens of optimiser steps in |
-| `num_learners > 1` | **Now refused** with `cbp_enabled` (config validation, [15](15_findings_and_recommendations.md) R-12): each learner picks the unit to replace from its own minibatch, outside the gradient, so the replicas can drift apart. `cbp_metrics_only` replaces nothing and is allowed. The row below is the earlier, separate wrapping problem. RLlib wraps each module in `TorchDDPRLModule`, which forwards no attributes, so the trunk-to-head join found nothing and the default network silently got 2 replaceable layers instead of 4. It also prefixes every `named_modules` name with `module.`, which would have made state keys differ between distributed and single-learner runs |
+| `num_learners > 1` | **Now refused** with `cbp_enabled` (config validation, [15](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/15_findings_and_recommendations.md) R-12): each learner picks the unit to replace from its own minibatch, outside the gradient, so the replicas can drift apart. `cbp_metrics_only` replaces nothing and is allowed. The row below is the earlier, separate wrapping problem. RLlib wraps each module in `TorchDDPRLModule`, which forwards no attributes, so the trunk-to-head join found nothing and the default network silently got 2 replaceable layers instead of 4. It also prefixes every `named_modules` name with `module.`, which would have made state keys differ between distributed and single-learner runs |
 | Restore | §3.5 |
 
 The three code fixes are small — derive the device from `layer.incoming.weight`, build the
@@ -743,7 +758,7 @@ Effort: **M**. Risk: **contained** — the off-by-default path resolves to the s
 ### 4.3 Proposal C — CBP during offline pretraining
 
 `train/pretrain/` trains a JEPA encoder on observations alone before any PPO run
-([24](24_pretraining.md)). That loop has **no PPO ratio at all**, so §3.1's constraint vanishes and
+([24](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/24_pretraining.md)). That loop has **no PPO ratio at all**, so §3.1's constraint vanishes and
 replacement can run as often as the algorithm wants. It is also the cleanest possible test of the
 mechanism: a supervised-style objective with a well-defined loss, where "did plasticity degrade"
 has an unambiguous answer.
@@ -760,13 +775,13 @@ weighted-sampling scheme cannot see. Utility profiles could inform matchmaking d
 
 Effort: **L**. Depends on A and B. It also needed S1-3 fixed, since otherwise every champion
 converges on the same passive behaviour and there is no diversity to preserve; S1-3 is fixed
-([S1-3](29_fixed_issues.md#s1-3--doing-nothing-is-a-dominant-strategy-verified-fixed)).
+([S1-3](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/29_fixed_issues.md#s1-3--doing-nothing-is-a-dominant-strategy-verified-fixed)).
 
 ---
 
 ## 5. What would have to be measured
 
-The comparison protocol is [18](18_configuration.md) §5.5, with one substitution forced by §3.2.
+The comparison protocol is [18](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/18_configuration.md) §5.5, with one substitution forced by §3.2.
 
 | Question | Instrument | Predicted if plasticity loss is real here |
 |---|---|---|
@@ -776,12 +791,12 @@ The comparison protocol is [18](18_configuration.md) §5.5, with one substitutio
 | Does it cost anything early? | Probe + return at low iteration counts | Indistinguishable — `ρ = 1e-4` is small |
 | Does it help returns? | Returns comparison, multi-seed (§3.2) | Interpretable now that S1-3 is fixed; not yet run |
 
-The metric names are the ones the Learner actually emits ([11](11_logging_and_observability.md)),
+The metric names are the ones the Learner actually emits ([11](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/11_logging_and_observability.md)),
 and the rank in the first row is deliberately **not** `cbp_batch_effective_rank`: that one is
 measured on the training minibatch and is confounded by the policy's own input distribution, which
 is §3.8 and the reason `train/probe/rank.py` exists.
 
-Multi-seed, since [23](23_probe_harness.md) already notes no multi-seed comparison has ever been
+Multi-seed, since [23](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/23_probe_harness.md) already notes no multi-seed comparison has ever been
 run here and a single-seed plasticity result would be worthless.
 
 One further check, specific to this repo: reinitialisation draws random numbers, and
@@ -826,14 +841,14 @@ asked yet.
 
 | Step | Work | Depends on | Effort |
 |---|---|---|---|
-| 0 | ~~S1-1 (`vf_clip_param` / reward scaling), S1-3 (reward sign)~~ — **done**, see [29](29_fixed_issues.md) | — | S–M |
+| 0 | ~~S1-1 (`vf_clip_param` / reward scaling), S1-3 (reward sign)~~ — **done**, see [29](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/29_fixed_issues.md) | — | S–M |
 | 1 | ~~**Proposal A** — plasticity metrics, including the utility statistic computed but unused~~ — **done**, `cbp_metrics_only` | **nothing** | S |
 | 2 | ~~**Proposal B** — the mechanism, off by default, composed over `learner_class_for`~~ — **done** | 1 | M |
 | 3 | ~~Checkpoint round-trip and seeding tests for CBP state~~ — **done**, `test_cbp.py` + `integration/test_cbp_wiring.py` | 2 | S |
-| 4 | ~~Run with `cbp_metrics_only: true` and decide whether §3.3 is answered yes~~ — **done at ~2×10⁴ optimiser steps; answer is no** (§3.3, [16](16_verification_log.md) §16.16) | 1 | S |
+| 4 | ~~Run with `cbp_metrics_only: true` and decide whether §3.3 is answered yes~~ — **done at ~2×10⁴ optimiser steps; answer is no** (§3.3, [16](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/16_verification_log.md) §16.16) | 1 | S |
 | 4b | ~~Fix the confounded rank metric~~ — **done**, `train/probe/rank.py` (§3.8) | 4 | S |
 | 5 | **Re-run step 4 at 10⁶–10⁸ steps on real hardware**, multi-seed, reading `train/probe/rank.py` rather than the batch metric | 4b | S code, L compute |
-| 6 | Probe-scored CBP-on/off comparison, multi-seed, with tuned Adam held fixed across arms — **only if step 5 finds something** | 5, [23](23_probe_harness.md) | M |
+| 6 | Probe-scored CBP-on/off comparison, multi-seed, with tuned Adam held fixed across arms — **only if step 5 finds something** | 5, [23](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/23_probe_harness.md) | M |
 | 7 | **Proposal C** — CBP in the offline pretrainer, the cleanest test: no policy, so no input-distribution confound at all | 2 | S |
 | 8 | Returns-based comparison | 0, 6 | M |
 | 9 | **Proposal D** — utility profiles in league matchmaking | 0, 2 | L |
@@ -869,8 +884,8 @@ Related work, for the alternatives §1.2 compares against:
 
 ## Review findings (R-12 to R-14)
 
-R-12 is guarded rather than fixed and is open in [15](15_findings_and_recommendations.md); R-13 and
-R-14 are fixed ([R-13](29_fixed_issues.md#from-the-2026-10-07-review)).
+R-12 is guarded rather than fixed and is open in [15](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/15_findings_and_recommendations.md); R-13 and
+R-14 are fixed ([R-13](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/29_fixed_issues.md#from-the-2026-10-07-review)).
 
 - **One learner.** `cbp_enabled` with `num_learners > 1` is refused at config time (R-12, #182).
   Averaged gradients keep several learners identical; a replacement is a direct overwrite chosen
