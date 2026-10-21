@@ -20,7 +20,7 @@ env:
   # A gym-CDA ref with `learner_order` and `train/model/layout.py`. While it still
   # has its own CBP, tests/test_equivalence.py compares the two; after that the
   # file skips itself.
-  GYM_CDA_REF: ${{ inputs.gym_cda_ref || 'claude/project-thread-x9tqxp' }}
+  GYM_CDA_REF: ${{ inputs.gym_cda_ref || 'master' }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
