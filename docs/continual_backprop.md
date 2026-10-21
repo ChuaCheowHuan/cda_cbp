@@ -758,7 +758,7 @@ Effort: **M**. Risk: **contained** — the off-by-default path resolves to the s
 ### 4.3 Proposal C — CBP during offline pretraining
 
 `train/pretrain/` trains a JEPA encoder on observations alone before any PPO run
-([24](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/24_pretraining.md)). That loop has **no PPO ratio at all**, so §3.1's constraint vanishes and
+([23](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/23_probe_harness.md), Part 2: pretraining). That loop has **no PPO ratio at all**, so §3.1's constraint vanishes and
 replacement can run as often as the algorithm wants. It is also the cleanest possible test of the
 mechanism: a supervised-style objective with a well-defined loss, where "did plasticity degrade"
 has an unambiguous answer.
