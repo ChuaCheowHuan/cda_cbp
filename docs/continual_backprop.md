@@ -83,8 +83,8 @@ if c > 1:  r = argmin u over eligible;  replace r;  c -= 1
 - **incoming** weights are re-sampled from the layer's original initialisation distribution,
 - **outgoing** weights are set to **zero**,
 - the unit's utility, mean activation and age are reset,
-- and the optimiser's per-parameter state for those weights — Adam's two moment estimates — is
-  reset too (arXiv Algorithm 2).
+- and the optimiser's per-weight state for those weights — Adam's two moment estimates and, with
+  `optimizer: "adam_gnt"`, its timestep — is reset too (arXiv Algorithm 2).
 
 Two details of that pseudocode carry real weight. **`c` is an accumulator, not a per-step
 quantity**: at `ρ = 1e-4` over 256 units the per-step figure is 0.026, so anything that rounded it
@@ -737,11 +737,13 @@ train/model/optim_learner.py  # independent of CBP
 - **State:** utility, mean activation, age and accumulator held on the **Learner**, so champion
   snapshots and inference-only copies never see them (§3.4), and routed through `get_state` /
   `set_state` so a resume is correct (§3.5).
-- **Optimiser:** Adam moments zeroed for the replaced slices. The per-weight *timestep* reset
-  Algorithm 2 also specifies is **not** implemented and cannot be with stock `torch.optim.Adam`,
-  which keeps one scalar `step` per parameter tensor rather than per element. Cost of omitting it:
-  the new unit's effective step ramps up over ~`1/(1-β₁)` updates instead of being full size at
-  once. Documented in `_reset_optimizer_slots`.
+- **Optimiser:** Adam moments zeroed for the replaced slices, and with `optimizer: "adam_gnt"` (the
+  default for a new run) the per-weight *timestep* too, as Algorithm 2 specifies. That optimiser is
+  the authors' `AdamGnT`, imported from `lop`, which keeps a `step` tensor the shape of each
+  parameter. Stock `torch.optim.Adam` keeps one scalar `step` per tensor, so under
+  `optimizer: "torch_adam"` (and every checkpoint from before the setting) the timestep is not
+  reset and the new unit's effective step ramps up over ~`1/(1-β₁)` updates instead of being full
+  size at once. Documented in `_reset_optimizer_slots`.
 - **Composition:** applied over `learner_class_for(...)`'s result, so MoE and JEPA terms survive
   (§2.5). Off by default, and when off the composition is skipped entirely so the resolved learner
   class is *identical* to today's — asserted by

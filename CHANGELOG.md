@@ -5,6 +5,11 @@
 - **The loss-of-plasticity code is a submodule.** `third_party/loss-of-plasticity` pins the
   authors' repository; the wheel installs its `lop`, `lop.utils` and `lop.algos` unchanged, and
   ships its licence. Clone with `--recurse-submodules` (docs/development.md).
+- **`optimizer` setting, `adam_gnt` by default.** When units are replaced, CBP builds the authors'
+  `AdamGnT` (imported from `lop`) with gym-CDA's Adam settings, and a replacement resets the
+  replaced weights' timestep as well as both moments, as arXiv Algorithm 2 specifies.
+  `torch_adam` keeps the old behaviour. A settings block without the key (a checkpoint written
+  before it) means `torch_adam`, so a resumed run trains as it did.
 
 ## 0.1.0
 
