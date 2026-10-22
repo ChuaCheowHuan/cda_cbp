@@ -53,6 +53,7 @@ third_party/loss-of-plasticity checkout <sha>`, commit the submodule, and let CI
 | `test_equivalence.py` | The gate for removing CBP from gym-CDA (see [migration.md](migration.md)). Skipped against a gym-CDA without built-in CBP |
 | `test_extension.py` | The package as gym-CDA sees it: discovery, defaults, validation, legacy settings |
 | `test_lop.py` | The `lop` modules used import, are the pinned submodule's files unchanged, and `lop.envs` is not installed |
+| `test_count_rule.py` | The `arxiv` rule replaces every whole unit the accumulator holds, `nature` at most one, a missing `count_rule` means `nature`, and the init bound is `lop`'s `get_layer_bound` |
 | `test_adam_gnt.py` | `AdamGnT`'s per-weight timestep is reset with the moments for exactly the replaced slices, torch Adam is left alone, a missing `optimizer` means `torch_adam`, and a real `Algorithm` builds the optimiser asked for |
 | `test_docs.py` | The settings table matches `DEFAULTS`, and every relative link resolves |
 

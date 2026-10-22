@@ -70,14 +70,17 @@ process running alongside it:
 | Age / maturity | `a_i`, `m` | A freshly reinitialised unit is protected from replacement for `m` steps, so it gets a chance to become useful |
 | Replacement rate | `ρ` | Fraction of *eligible* units replaced per step. Small — `1e-4` is the papers' working value |
 
-Each optimiser step, in each layer, a fractional counter advances and at most one unit is replaced
-(Nature Algorithm 1):
+Each optimiser step, in each layer, a fractional counter advances and the lowest-utility eligible
+units are replaced. arXiv 2108.06325v3 (Algorithms 1 and 2) replaces "`n_l · ρ` of eligible
+features"; Nature Algorithm 1 replaces at most one. `count_rule` picks between them, `arxiv` by
+default:
 
 ```
 age += 1;  update u
 eligible = units with age > m
 c += |eligible| · ρ
-if c > 1:  r = argmin u over eligible;  replace r;  c -= 1
+arxiv:   k = min(floor(c), |eligible|)      nature:  k = 1 if c > 1 else 0
+replace the k lowest-u eligible units;  c -= k
 ```
 
 - **incoming** weights are re-sampled from the layer's original initialisation distribution,
@@ -88,9 +91,11 @@ if c > 1:  r = argmin u over eligible;  replace r;  c -= 1
 
 Two details of that pseudocode carry real weight. **`c` is an accumulator, not a per-step
 quantity**: at `ρ = 1e-4` over 256 units the per-step figure is 0.026, so anything that rounded it
-to an integer would replace nothing, ever. And it is **`if`, not `while`** — one replacement per
-layer per step however high `ρ` goes, which is what bounds how far a single step can move the
-function, and is why §3.1 resolves the way it does.
+to an integer would replace nothing, ever. And under `nature` it is **`if`, not `while`** — one
+replacement per layer per step however high `ρ` goes, which bounds how far a single step can move
+the function. Under `arxiv` the bound is the rate itself: a step replaces only the whole units the
+counter holds, and at `ρ = 1e-4` over 256 units that is one unit about every 39 steps, so the two
+rules agree on almost every step (§3.1).
 
 **Which utility.** Nature's Algorithm 1 uses the *contribution* utility alone,
 `|h_i| · Σ_k |w_out|`. arXiv builds it up in two further steps: subtract the running mean
@@ -423,8 +428,9 @@ one recomputed on the learner, and a replacement between minibatches moves the n
 
 - The replaced unit's outgoing weights are zeroed, so `logp_new` is unchanged at the instant of
   replacement; only the removed contribution of the lowest-utility unit moves it at all.
-- Nature Algorithm 1 replaces **at most one unit per layer per step** — it is `If c > 1`, not
-  `while`. However high the rate is set, one step cannot cascade.
+- A step replaces at most the whole units the accumulator holds, which at the shipped rate is
+  almost never more than one. `count_rule: "nature"` makes that a hard cap (Nature Algorithm 1 is
+  `If c > 1`, not `while`), so however high the rate is set, one step cannot cascade.
 - At the shipped rate a replacement happens roughly once per 39 optimiser steps.
 
 So the implementation follows the paper: `apply_gradients`, which RLlib calls once per minibatch
