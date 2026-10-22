@@ -2,9 +2,6 @@ name: cda_cbp
 
 # Tests cda_cbp (Continual Backprop for gym-continuousDoubleAuction) against an
 # installed gym-CDA.
-#
-# Lives in ci/ until it is copied to .github/workflows/: the session that wrote
-# it could not push workflow files.
 
 on:
   push:
@@ -17,8 +14,7 @@ on:
         required: false
 
 env:
-  # A gym-CDA ref with `learner_order`, `train/model/layout.py`,
-  # `optim_learner.adam_settings` and `effective_rank(..., too_few_rows=)`.
+  # A gym-CDA ref at version 2.1.0 or later (pyproject pins >=2.1,<3).
   GYM_CDA_REF: ${{ inputs.gym_cda_ref || 'master' }}
 
 concurrency:
