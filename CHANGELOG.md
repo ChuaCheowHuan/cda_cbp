@@ -1,7 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
+- **Version 0.2.0.** gym-CDA records this beside every checkpoint that enables `cbp`. Checkpoints
+  written on `main` between #5 and this bump say 0.1.0, though they ran these defaults; their
+  recorded settings (`optimizer`, `count_rule`) tell them apart from 0.1.0 proper.
 - **The loss-of-plasticity code is a submodule.** `third_party/loss-of-plasticity` pins the
   authors' repository; the wheel installs its `lop`, `lop.utils` and `lop.algos` unchanged, and
   ships its licence. Clone with `--recurse-submodules` (docs/development.md).
