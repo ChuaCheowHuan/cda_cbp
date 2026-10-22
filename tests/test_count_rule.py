@@ -64,6 +64,57 @@ class TestTheArxivRule:
         replaced = select_and_replace(state, layer, torch.zeros(5), config)
         assert sorted(replaced) == [1, 2]
 
+    def test_the_counter_advances_by_n_l_rho_not_by_the_eligible_count(self):
+        """arXiv Algorithms 1 and 2: "n_l * rho of eligible features" (#2).
+
+        Five units, two of them eligible, at 0.1: the paper's counter gains
+        5 * 0.1 = 0.5 a step and fires on the second; counting only the eligible
+        units (lop's GnT) gains 0.2 and would not fire until the fifth.
+        """
+        layer, state = _setup()
+        state.age = torch.tensor([0, 10, 10, 0, 0])
+        config = CBPConfig(
+            enabled=True, maturity_threshold=5, count_rule="arxiv", replacement_rate=0.1
+        )
+        assert select_and_replace(state, layer, torch.arange(5.0), config) == []
+        assert state.accumulator == pytest.approx(0.5)
+        assert select_and_replace(state, layer, torch.arange(5.0), config) == [1]
+
+    def test_nothing_accumulates_while_no_unit_is_eligible(self):
+        layer, state = _setup()
+        state.age = torch.zeros(5, dtype=torch.long)
+        config = CBPConfig(
+            enabled=True, maturity_threshold=5, count_rule="arxiv", replacement_rate=0.1
+        )
+        assert select_and_replace(state, layer, torch.zeros(5), config) == []
+        assert state.accumulator == 0.0
+
+
+class TestTheLopRule:
+    """`lop`: the authors' GnT with `accumulate=True`, which adds
+    |eligible| * rho and replaces every whole unit; kept by name (#2)."""
+
+    def test_the_counter_advances_by_the_eligible_count(self):
+        layer, state = _setup()
+        state.age = torch.tensor([0, 10, 10, 0, 0])
+        config = CBPConfig(
+            enabled=True, maturity_threshold=5, count_rule="lop", replacement_rate=0.1
+        )
+        for _ in range(4):
+            assert select_and_replace(state, layer, torch.arange(5.0), config) == []
+        assert state.accumulator == pytest.approx(0.8)
+        assert select_and_replace(state, layer, torch.arange(5.0), config) == [1]
+
+    def test_every_whole_unit_is_replaced(self):
+        layer, state = _setup()
+        config = CBPConfig(
+            enabled=True, maturity_threshold=0, count_rule="lop", replacement_rate=0.5
+        )
+        assert sorted(select_and_replace(state, layer, torch.arange(5.0), config)) == [0, 1]
+        assert state.accumulator == pytest.approx(0.5)
+
+
+class TestTheNatureRule:
     def test_the_nature_rule_still_caps_at_one(self):
         layer, state = _setup()
         config = CBPConfig(
