@@ -72,19 +72,26 @@ process running alongside it:
 
 Each optimiser step, in each layer, a fractional counter advances and the lowest-utility eligible
 units are replaced. arXiv 2108.06325v3 (Algorithms 1 and 2) replaces "`n_l · ρ` of eligible
-features"; Nature Algorithm 1 replaces at most one. `count_rule` picks between them, `arxiv` by
-default:
+features", `n_l` being the layer's width; Nature Algorithm 1 adds `|eligible| · ρ` and replaces at
+most one. The authors' code (`lop`'s GnT, `accumulate=True`) adds `|eligible| · ρ` and replaces
+every whole unit. `count_rule` picks between the three, `arxiv` by default:
 
 ```
 age += 1;  update u
 eligible = units with age > m
-c += |eligible| · ρ
-arxiv:   k = min(floor(c), |eligible|)      nature:  k = 1 if c > 1 else 0
+arxiv:   c += n_l · ρ;         k = min(floor(c), |eligible|)
+lop:     c += |eligible| · ρ;  k = min(floor(c), |eligible|)
+nature:  c += |eligible| · ρ;  k = 1 if c > 1 else 0
 replace the k lowest-u eligible units;  c -= k
 ```
 
+The counter does not move on a step with no eligible unit. Once every unit is mature the three
+grow it equally; `arxiv` and `lop` differ only while units mature.
+
 - **incoming** weights are re-sampled from the layer's original initialisation distribution,
-- **outgoing** weights are set to **zero**,
+- **outgoing** weights are set to **zero**, in every head that reads the layer: `pi` and `vf`, and
+  any head another extension adds and declares in gym-CDA's `extra_trunk_heads` (cda-discorl's
+  `aux_pi` and `disco_heads`),
 - the unit's utility, mean activation and age are reset,
 - and the optimiser's per-weight state for those weights — Adam's two moment estimates and, with
   `optimizer: "adam_gnt"`, its timestep — is reset too (arXiv Algorithm 2).
@@ -110,10 +117,10 @@ default here and the other two are selectable.
 flowchart LR
     B["optimiser step<br/>(one PPO minibatch)"] --> U["update age and utility<br/>u_i ← η·u_i + (1-η)·y_i"]
     U --> E["eligible = mature units<br/>age > m"]
-    E --> C["c += eligible·ρ"]
-    C --> S{"c > 1?"}
+    E --> C["c += n_l·ρ (arxiv)<br/>or #124;eligible#124;·ρ"]
+    C --> S{"a whole unit in c?"}
     S -->|"no"| B
-    S -->|"yes"| R["reinitialise argmin u<br/>one unit; c -= 1"]
+    S -->|"yes"| R["reinitialise the k lowest-u units<br/>(nature: one); c -= k"]
     R --> RI["incoming ~ init dist"]
     R --> RO["outgoing := 0"]
     R --> RA["age, utility := 0"]

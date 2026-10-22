@@ -53,7 +53,8 @@ third_party/loss-of-plasticity checkout <sha>`, commit the submodule, and let CI
 | `test_lop_reference.py` | Step by step against the authors' `lop.algos.gnt.GnT` on the same network, data and `AdamGnT`: the same units replaced, ages, utility ranking, network and Adam state (timestep included) |
 | `test_extension.py` | The package as gym-CDA sees it: discovery, defaults, validation, legacy settings |
 | `test_lop.py` | The `lop` modules used import, are the pinned submodule's files unchanged, and `lop.envs` is not installed |
-| `test_count_rule.py` | The `arxiv` rule replaces every whole unit the accumulator holds, `nature` at most one, a missing `count_rule` means `nature`, and the init bound is `lop`'s `get_layer_bound` |
+| `test_count_rule.py` | The `arxiv` counter grows by `n_l · ρ` and `lop`'s by the eligible count, both replace every whole unit it holds, `nature` at most one, a missing `count_rule` means `nature`, and the init bound is `lop`'s `get_layer_bound` |
+| `test_extra_heads.py` | Heads another extension declares in `extra_trunk_heads` are consumers of the trunk's last layer, on MLP and LSTM trunks, and a replacement zeroes the unit in each |
 | `test_adam_gnt.py` | `AdamGnT`'s per-weight timestep is reset with the moments for exactly the replaced slices, torch Adam is left alone, a missing `optimizer` means `torch_adam`, and a real `Algorithm` builds the optimiser asked for |
 | `test_docs.py` | The settings table matches `DEFAULTS`, and every relative link resolves |
 
@@ -63,7 +64,8 @@ This package relies on gym-CDA for:
 
 - `train/extensions.py`: `Extension` (with `learner_order`), `settings_for`, the fingerprinting
   of `ext.cbp.<key>` on a resume, and refusing a restore whose extension is missing.
-- `train/model/layout.py`: `trunk_outputs(module)`, where each trunk ends and which heads read it.
+- `train/model/layout.py`: `trunk_outputs(module)`, where each trunk ends and which heads read it,
+  `extra_heads` (gym-CDA 2.1) included.
   gym-CDA's `test_model_layout.py` pins it, so a rename there fails gym-CDA's CI rather than this
   package silently.
 - `train/model/cbp_learner.py` (after CBP left gym-CDA): a shim that resolves

@@ -23,7 +23,7 @@ Listing `"cbp"` turns Continual Backprop on; there is no separate `enabled` key.
 | `fire_on` | `"adam_step"` | `adam_step` (after every optimiser step) or `iteration` |
 | `reset_optimizer_state` | `true` | Clear Adam's per-weight state for a replaced unit: both moments, and the timestep under `adam_gnt` |
 | `optimizer` | `"adam_gnt"` | `adam_gnt` (the authors' `AdamGnT` from `lop`, a timestep per weight, arXiv Algorithm 2) or `torch_adam` |
-| `count_rule` | `"arxiv"` | `arxiv` (replace every whole unit the accumulator holds) or `nature` (at most one per layer per step) |
+| `count_rule` | `"arxiv"` | `arxiv` (the counter grows by `n_l · ρ`; replace every whole unit it holds), `lop` (grows by `\|eligible\| · ρ`, as the authors' GnT) or `nature` (grows by `\|eligible\| · ρ`; at most one per layer per step) |
 | `compensate_mean` | `false` | Move a replaced unit's mean contribution into the next layer's bias |
 | `dead_unit_threshold` | `0.01` | Mean \|activation\| below which a unit counts as dead (metric only) |
 | `metrics_every_n_updates` | `10` | How often, in updates, the effective-rank metric is computed |
