@@ -50,8 +50,10 @@ from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn as nn
+from lop.algos.cbp_linear import get_layer_bound
 
 from gym_continuousDoubleAuction.train.model.layout import trunk_outputs
+from gym_continuousDoubleAuction.train.probe.rank import effective_rank as probe_effective_rank
 
 #: Utility measures, in the order Appendix C ablates them.
 #:
@@ -100,6 +102,32 @@ SCOPES = ("feedforward", "recurrent")
 #:               conservative placement stays available.
 FIRE_ON = ("adam_step", "iteration")
 
+#: The optimiser a replacing run trains with.
+#:
+#: `adam_gnt`   - the authors' `AdamGnT` (`lop.utils.AdamGnT`, imported, never
+#:                copied). It keeps Adam's timestep per weight, so a
+#:                replacement can reset it for exactly the replaced weights,
+#:                as arXiv Algorithm 2 specifies. The default for a new run.
+#: `torch_adam` - `torch.optim.Adam`, which keeps one timestep per tensor: the
+#:                moments are reset, the timestep cannot be. What every run
+#:                did before this setting existed, so a settings block without
+#:                it (a checkpoint's own recorded settings) means this.
+OPTIMIZERS = ("adam_gnt", "torch_adam")
+
+#: How many mature units a step replaces. Both carry the fractional counter
+#: `c += n_eligible * replacement_rate`; they differ in what a full counter buys.
+#:
+#: `arxiv`  - arXiv 2108.06325v3 Algorithms 1 and 2: "n_l * rho of eligible
+#:            features", every whole unit the counter holds (`floor(c)`, never
+#:            more than are eligible). The default for a new run.
+#: `nature` - the Nature paper's Algorithm 1, `if c > 1`: at most one unit per
+#:            layer per step. What every run did before this setting existed,
+#:            so a settings block without it means this.
+#:
+#: At this project's rate (1e-4 over 256 units, 0.026 per step) the two differ
+#: only when a step lands the counter on exactly 1, or carries it past 2.
+COUNT_RULES = ("arxiv", "nature")
+
 #: Modules allowed between a layer's two Linears. Anything else means the pair
 #: is not a plain feed-forward block and is left alone.
 _PASSTHROUGH = (
@@ -139,6 +167,12 @@ class CBPConfig:
     scope: str = "feedforward"
     fire_on: str = "adam_step"
     reset_optimizer_state: bool = True
+    #: `torch_adam` here, not the `adam_gnt` of a new run's defaults: a
+    #: checkpoint is rebuilt from its own recorded settings, and one written
+    #: before this key existed trained with torch Adam. See `OPTIMIZERS`.
+    optimizer: str = "torch_adam"
+    #: `nature` here for the same reason; a new run's default is `arxiv`. See `COUNT_RULES`.
+    count_rule: str = "nature"
     #: Move a replaced unit's mean contribution into the next layer's bias before its
     #: outgoing weights are zeroed, so the output does not jump (docs/29 R-13, #183). Off by
     #: default: the papers' rule zeroes and leaves the bias alone, and `docs/16` section 16.13
@@ -157,6 +191,14 @@ class CBPConfig:
             )
         if self.scope not in SCOPES:
             raise ValueError(f"Unknown scope {self.scope!r}. Available: {', '.join(SCOPES)}.")
+        if self.optimizer not in OPTIMIZERS:
+            raise ValueError(
+                f"Unknown optimizer {self.optimizer!r}. Available: {', '.join(OPTIMIZERS)}."
+            )
+        if self.count_rule not in COUNT_RULES:
+            raise ValueError(
+                f"Unknown count_rule {self.count_rule!r}. Available: {', '.join(COUNT_RULES)}."
+            )
         if self.fire_on not in FIRE_ON:
             raise ValueError(f"Unknown fire_on {self.fire_on!r}. Available: {', '.join(FIRE_ON)}.")
         if not 0.0 <= self.utility_decay < 1.0:
@@ -264,8 +306,18 @@ class ReplaceableLayer:
         return float(self.incoming.weight.detach().abs().mean().item())
 
 
-#: Adam's per-element moment buffers, the slots a replacement has to clear.
-_ADAM_SLOTS = ("exp_avg", "exp_avg_sq", "max_exp_avg_sq")
+def _per_weight_slots(slots: Dict[str, Any], param: torch.Tensor) -> List[torch.Tensor]:
+    """The optimiser buffers that hold one entry per weight of `param`.
+
+    Adam's moments (and AMSGrad's maximum) always; the timestep too under
+    `AdamGnT`, which keeps it per weight. torch Adam's timestep is a scalar for
+    the whole tensor and is left alone: it cannot be reset for one unit.
+    """
+    return [
+        value
+        for value in slots.values()
+        if isinstance(value, torch.Tensor) and value.shape == param.shape
+    ]
 
 
 @dataclass
@@ -380,7 +432,7 @@ class RecurrentLayer:
                 out.weight[:, index] = 0.0
 
     def reset_optimizer_slots(self, optimizer: torch.optim.Optimizer, index: int) -> None:
-        """Zero Adam's moments for every entry `reinitialise` just reset."""
+        """Zero Adam's per-weight state for every entry `reinitialise` just reset."""
         h = self.lstm.hidden_size
         rows = [g * h + index for g in range(4)]
         targets = [("weight_ih", rows, None), ("weight_hh", rows, None), ("weight_hh", None, index)]
@@ -388,23 +440,15 @@ class RecurrentLayer:
             targets += [("bias_ih", rows, None), ("bias_hh", rows, None)]
         with torch.no_grad():
             for kind, row_idx, col_idx in targets:
-                slots = optimizer.state.get(self._p(kind))
-                if not slots:
-                    continue
-                for key in _ADAM_SLOTS:
-                    if key not in slots:
-                        continue
+                param = self._p(kind)
+                for buffer in _per_weight_slots(optimizer.state.get(param) or {}, param):
                     if row_idx is not None:
-                        slots[key][row_idx] = 0.0
+                        buffer[row_idx] = 0.0
                     else:
-                        slots[key][:, col_idx] = 0.0
+                        buffer[:, col_idx] = 0.0
             for out in self.outgoing:
-                slots = optimizer.state.get(out.weight)
-                if not slots:
-                    continue
-                for key in _ADAM_SLOTS:
-                    if key in slots:
-                        slots[key][:, index] = 0.0
+                for buffer in _per_weight_slots(optimizer.state.get(out.weight) or {}, out.weight):
+                    buffer[:, index] = 0.0
 
 
 # --- Layer discovery --------------------------------------------------------
@@ -798,23 +842,20 @@ def select_and_replace(
 ) -> List[int]:
     """Replace the lowest-utility mature units; return the indices replaced.
 
-    The accumulator is the part most often got wrong, in two ways.
-
-    First, the papers do *not* say "replace `rate * n` units per step". They
-    carry a fractional counter, because at a replacement rate of 1e-4 over 256
-    units the per-step quantity is 0.026 and rounding it to an integer would
-    replace nothing, ever:
+    The accumulator is the part most often got wrong. The papers do *not* say
+    "replace `rate * n` units per step, rounded". They carry a fractional
+    counter, because at a replacement rate of 1e-4 over 256 units the per-step
+    quantity is 0.026 and rounding it to an integer would replace nothing, ever:
 
         c += n_eligible * replacement_rate
-        if c > 1:  replace argmin utility; c -= 1
 
-    Second, that is an `if`, not a `while` - Nature Algorithm 1 is explicit, and
-    it caps the damage at **one unit per layer per optimiser step** however high
-    the rate is set. Worth keeping rather than "fixing": the cap is what bounds
-    how far a single step can move the function, which is the whole reason a
-    replacement is safe to run inside PPO's minibatch loop. A rate high enough
-    to make the counter outrun the cap is a misconfiguration, and
-    `cbp_replacements` against the accumulator is what shows it.
+    What a full counter buys is `config.count_rule` (see `COUNT_RULES`):
+    `arxiv` replaces `floor(c)` units, the arXiv paper's "n_l * rho of eligible
+    features"; `nature` is the Nature paper's `if c > 1`, one unit per layer per
+    step however high the rate is set, which bounds how far a single step can
+    move the function. At a realistic rate the counter rarely holds more than
+    one unit, so the two agree on almost every step; `cbp_replacements` against
+    the accumulator is what shows a rate high enough for them to differ.
     """
     if not config.replaces:
         return []
@@ -823,22 +864,26 @@ def select_and_replace(
     n_eligible = int(eligible.sum().item())
     if n_eligible == 0:
         return []
-
     state.accumulator += n_eligible * config.replacement_rate
-    if state.accumulator <= 1.0:
+    if config.count_rule == "nature":
+        count = 1 if state.accumulator > 1.0 else 0
+    else:
+        count = min(int(state.accumulator), n_eligible)
+    if count == 0:
         return []
 
-    # +inf for ineligible units, so argmin can only land on a mature one.
+    # +inf for ineligible units, so the lowest `count` can only be mature ones.
     masked = torch.where(
         eligible,
         corrected_utility,
         torch.full_like(corrected_utility, float("inf")),
     )
-    index = int(masked.argmin().item())
-    _reinitialise(state, layer, index, generator, optimizer, config)
-    state.accumulator -= 1.0
-    state.replacements += 1
-    return [index]
+    indices = [int(i) for i in torch.topk(masked, count, largest=False).indices]
+    for index in indices:
+        _reinitialise(state, layer, index, generator, optimizer, config)
+    state.accumulator -= float(count)
+    state.replacements += count
+    return indices
 
 
 def _reinitialise(
@@ -871,12 +916,13 @@ def _reinitialise(
         weight = layer.incoming.weight
         # The incoming weights are redrawn from PyTorch's default `nn.Linear`
         # weight init, which is what RLlib's MLP leaves in place:
-        # U(-1/sqrt(fan_in), +1/sqrt(fan_in)). The bias is NOT drawn from the
+        # U(-1/sqrt(fan_in), +1/sqrt(fan_in)), the bound the authors'
+        # `get_layer_bound` gives for `init="default"`. The bias is NOT drawn from the
         # default's bias distribution: it is set to 0 below, as the continual-
         # backprop papers prescribe (and as the recurrent layer does). An encoder
         # built with a custom initialiser would need this extended; none in this
         # repo is.
-        bound = 1.0 / math.sqrt(layer.incoming.in_features)
+        bound = get_layer_bound(layer.incoming, "default", 1.0)
         fresh = torch.empty_like(weight[index]).uniform_(-bound, bound, generator=generator)
         weight[index] = fresh
         if layer.incoming.bias is not None:
@@ -910,42 +956,30 @@ def _reset_optimizer_slots(
     optimizer: torch.optim.Optimizer, layer: ReplaceableLayer, index: int
 ) -> None:
     # (A `RecurrentLayer` clears its own slots; see `_reinitialise`.)
-    """Zero Adam's moment estimates for the weights a replacement just reset.
+    """Zero Adam's per-weight state for the weights a replacement just reset.
 
-    arXiv Algorithm 2: a reinitialised weight that inherits a large second
+    arXiv Algorithm 2: both moment estimates and the timestep of every reset
+    weight go to zero. A reinitialised weight that inherits a large second
     moment takes tiny steps and stays dead, which would defeat the point of
-    replacing it.
+    replacing it; the timestep restarts its bias correction.
 
-    **Documented deviation.** Algorithm 2 also resets a *per-weight timestep*
-    so Adam's bias correction restarts for that weight. `torch.optim.Adam`
-    keeps one scalar `step` per parameter tensor, not per element, so this is
-    not expressible without replacing the optimiser. The cost of omitting it:
-    the new unit's zeroed moments are bias-corrected by ~1 instead of by
-    `1 - beta`, so its effective step ramps up over roughly `1/(1 - beta_1)`
-    updates rather than being full size immediately. That is a slower start for
-    the replacement, not a wrong one.
+    Under `AdamGnT` (`optimizer: "adam_gnt"`) that is all of it. Under torch
+    Adam the timestep is one scalar per tensor and is left alone - a documented
+    deviation: the new unit's zeroed moments are then bias-corrected by ~1
+    instead of by `1 - beta`, so its effective step ramps up over roughly
+    `1/(1 - beta_1)` updates rather than being full size immediately. A slower
+    start for the replacement, not a wrong one.
     """
     with torch.no_grad():
-        for param, rows in (
-            (layer.incoming.weight, index),
-            (layer.incoming.bias, index),
-        ):
+        for param in (layer.incoming.weight, layer.incoming.bias):
             if param is None:
                 continue
-            slots = optimizer.state.get(param)
-            if not slots:
-                continue
-            for key in ("exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
-                if key in slots:
-                    slots[key][rows] = 0.0
+            for buffer in _per_weight_slots(optimizer.state.get(param) or {}, param):
+                buffer[index] = 0.0
 
         for out in layer.outgoing:
-            slots = optimizer.state.get(out.weight)
-            if not slots:
-                continue
-            for key in ("exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
-                if key in slots:
-                    slots[key][:, index] = 0.0
+            for buffer in _per_weight_slots(optimizer.state.get(out.weight) or {}, out.weight):
+                buffer[:, index] = 0.0
 
 
 # --- Plasticity metrics -----------------------------------------------------
@@ -974,27 +1008,14 @@ def effective_rank(activations: torch.Tensor, threshold: float = 0.99) -> float:
     network's capacity on a fixed corpus did not move at all (docs/16 §16.16).
     `train/probe/rank.py` is the version that holds the inputs still.
 
-    `train.probe.rank.effective_rank` is the same definition in numpy;
-    `test_probe.py::TestEffectiveRank.test_it_agrees_with_the_torch_definition`
-    pins that the two agree.
-
-    They differ in exactly one place, deliberately. A matrix with fewer than
-    two rows has nothing to decompose: this returns NaN, because the value goes
-    into a metric series where a plotted 0.0 reads as total collapse, and the
-    probe's version returns 0, because that value goes into a report column
-    read as a rank. The agreement test pins both answers.
+    The definition is gym-CDA's `train.probe.rank.effective_rank`, called
+    here rather than copied, so the metric and the probe cannot drift apart.
+    It differs in one argument, deliberately. A matrix with fewer than two rows
+    has nothing to decompose: this returns NaN, because the value goes into a
+    metric series where a plotted 0.0 reads as total collapse, and the probe
+    returns 0, because its value goes into a report column read as a rank.
     """
-    matrix = activations.detach()
-    if matrix.dim() > 2:
-        matrix = matrix.reshape(-1, matrix.shape[-1])
-    if matrix.numel() == 0 or matrix.shape[0] < 2:
-        return float("nan")
-    singular = torch.linalg.svdvals(matrix.float())
-    total = singular.sum()
-    if total <= 0:
-        return 0.0
-    cumulative = torch.cumsum(singular, dim=0) / total
-    return float((cumulative < threshold).sum().item() + 1)
+    return float(probe_effective_rank(activations, threshold, too_few_rows=float("nan")))
 
 
 def plasticity_metrics(

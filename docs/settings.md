@@ -2,7 +2,7 @@
 
 Every key the `cbp` extension accepts, with its default. gym-CDA fills in defaults and rejects a
 key not listed here when the `TrainConfig` is built. The source of truth is
-[`cda_cbp/config.py`](../cda_cbp/config.py) (`DEFAULTS`); `tests/test_settings_doc.py` checks this table against it.
+[`cda_cbp/config.py`](../cda_cbp/config.py) (`DEFAULTS`); `tests/test_docs.py` checks this table against it.
 
 ```json
 "extensions_enabled": ["cbp"],
@@ -21,7 +21,9 @@ Listing `"cbp"` turns Continual Backprop on; there is no separate `enabled` key.
 | `utility` | `"overall"` | `contribution`, `mean_corrected` or `overall` |
 | `scope` | `"feedforward"` | `feedforward`, or `recurrent` to add an LSTM core's top layer |
 | `fire_on` | `"adam_step"` | `adam_step` (after every optimiser step) or `iteration` |
-| `reset_optimizer_state` | `true` | Clear Adam's moments for a replaced unit's weights |
+| `reset_optimizer_state` | `true` | Clear Adam's per-weight state for a replaced unit: both moments, and the timestep under `adam_gnt` |
+| `optimizer` | `"adam_gnt"` | `adam_gnt` (the authors' `AdamGnT` from `lop`, a timestep per weight, arXiv Algorithm 2) or `torch_adam` |
+| `count_rule` | `"arxiv"` | `arxiv` (replace every whole unit the accumulator holds) or `nature` (at most one per layer per step) |
 | `compensate_mean` | `false` | Move a replaced unit's mean contribution into the next layer's bias |
 | `dead_unit_threshold` | `0.01` | Mean \|activation\| below which a unit counts as dead (metric only) |
 | `metrics_every_n_updates` | `10` | How often, in updates, the effective-rank metric is computed |
@@ -33,6 +35,11 @@ Listing `"cbp"` turns Continual Backprop on; there is no separate `enabled` key.
   drift apart (gym-CDA R-12, issue #182).
 - **Not together with gym-CDA's own CBP.** While a gym-CDA version still has `cbp_enabled`, setting it
   as well as enabling this extension is refused: CBP would be applied twice.
+- **A checkpoint keeps its own behaviour.** `optimizer` and `count_rule` are newer than the other keys. A
+  checkpoint written before them records neither, and a missing key means what every run did then:
+  `torch_adam` and `nature`. A new run gets the defaults in the table.
+- **`optimizer` applies only when units are replaced.** With `metrics_only` the optimiser is gym-CDA's
+  torch Adam, so measuring cannot change the trajectory.
 - **Fixed for a run.** gym-CDA fingerprints every resolved setting as `ext.cbp.<key>`, so changing one on
   a resume raises, as does enabling the extension on a resume. Changing a setting means a fresh run.
 

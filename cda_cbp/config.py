@@ -36,8 +36,12 @@ DEFAULTS: Dict[str, Any] = {
     "scope": "feedforward",
     # "adam_step" (after every optimiser step) or "iteration".
     "fire_on": "adam_step",
-    # Clear Adam's moments for a replaced unit's weights.
+    # Clear Adam's per-weight state (moments, and the timestep under adam_gnt) for a replaced unit.
     "reset_optimizer_state": True,
+    # "adam_gnt" (the authors' AdamGnT: per-weight timestep, arXiv Algorithm 2) or "torch_adam".
+    "optimizer": "adam_gnt",
+    # "arxiv" (replace every whole unit the counter holds) or "nature" (at most one per step).
+    "count_rule": "arxiv",
     # Move a replaced unit's mean contribution into the next layer's bias.
     "compensate_mean": False,
     # Mean |activation| below which a unit counts as dead, for the metric only.

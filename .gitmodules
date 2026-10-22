@@ -1,0 +1,3 @@
+[submodule "third_party/loss-of-plasticity"]
+	path = third_party/loss-of-plasticity
+	url = https://github.com/ChuaCheowHuan/loss-of-plasticity

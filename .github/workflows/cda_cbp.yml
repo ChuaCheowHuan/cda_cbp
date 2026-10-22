@@ -17,9 +17,8 @@ on:
         required: false
 
 env:
-  # A gym-CDA ref with `learner_order` and `train/model/layout.py`. While it still
-  # has its own CBP, tests/test_equivalence.py compares the two; after that the
-  # file skips itself.
+  # A gym-CDA ref with `learner_order`, `train/model/layout.py`,
+  # `optim_learner.adam_settings` and `effective_rank(..., too_few_rows=)`.
   GYM_CDA_REF: ${{ inputs.gym_cda_ref || 'master' }}
 
 concurrency:
@@ -32,6 +31,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The authors' loss-of-plasticity code, shipped unchanged as `lop`.
+          submodules: true
 
       - uses: actions/setup-python@v5
         with:
@@ -45,5 +47,5 @@ jobs:
           pip install "gym_continuousDoubleAuction @ git+https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction@${GYM_CDA_REF}"
           pip install ".[test]"
 
-      - name: Tests, including real training iterations and the equivalence gate
+      - name: Tests, including real training iterations and the lop reference test
         run: python -m pytest -q
