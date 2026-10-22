@@ -20,9 +20,22 @@ def test_it_wraps_outside_every_default_ordered_extension():
     assert cda_cbp.EXTENSION.learner_order > 0
 
 
+#: Keys whose `CBPConfig` value is the legacy one on purpose: a checkpoint is
+#: rebuilt from its own recorded settings, and one written before the key
+#: existed must keep behaving as it did. A new run gets the block's default.
+LEGACY_WHEN_MISSING = {"optimizer": "torch_adam"}
+
+
 def test_the_defaults_are_the_algorithms_defaults():
     """The block's defaults must not drift from `CBPConfig`'s, or "default" would mean two things."""
-    assert to_cbp_config(dict(DEFAULTS)) == CBPConfig(enabled=True)
+    settings = {**DEFAULTS, **LEGACY_WHEN_MISSING}
+    assert to_cbp_config(settings) == CBPConfig(enabled=True)
+
+
+def test_only_the_legacy_keys_differ():
+    assert DEFAULTS["optimizer"] == "adam_gnt"
+    for key, legacy in LEGACY_WHEN_MISSING.items():
+        assert getattr(CBPConfig(enabled=True), key) == legacy
 
 
 def test_enabled_with_no_settings_fills_every_default():
