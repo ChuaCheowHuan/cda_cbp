@@ -11,7 +11,7 @@ from gym_continuousDoubleAuction.train.extensions import Extension
 from cda_cbp import config
 from cda_cbp.learner import CBPLearnerMixin
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 #: Wraps every other extension's Learner mixin, as CBP did inside gym-CDA:
 #: it observes and replaces units after the whole optimiser step.

@@ -22,7 +22,7 @@ An equivalence test showed the two were the same mechanism while both existed: f
 state, on the same episodes, the built-in CBP and this package produced identical weights,
 optimiser state, CBP state and `cbp_*` metrics, with units replaced, for `mlp`, `jepa`, `lstm`
 under `recurrent` scope, `metrics_only`, and `fire_on: "iteration"` with `compensate_mean`. It
-was removed once gym-CDA no longer had a built-in CBP to compare with (CHANGELOG, Unreleased);
+was removed once gym-CDA no longer had a built-in CBP to compare with (CHANGELOG, 0.2.0);
 `tests/test_lop_reference.py` now compares against the authors' own implementation instead.
 
 ## A checkpoint
