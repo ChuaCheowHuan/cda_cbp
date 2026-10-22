@@ -13,13 +13,17 @@ what changes for a run, a config and a checkpoint.
 | `"cbp_<key>": value` | `"extension_settings": {"cbp": {"<key>": value}}` |
 | `"adam_betas"`, `"adam_weight_decay"` | unchanged: tuned Adam stayed in gym-CDA |
 
-Every key keeps its default ([settings.md](settings.md)). A gym-CDA version without built-in CBP
+Every old key keeps its default ([settings.md](settings.md)). Two keys are new, `optimizer` and
+`count_rule`; a run that does not set them gets the arXiv paper's behaviour, and a checkpoint that
+does not record them keeps the old one (settings.md, Rules). A gym-CDA version without built-in CBP
 rejects the old `cbp_*` keys with a message naming this package.
 
-The equivalence test (`tests/test_equivalence.py`) shows the two are the same mechanism: from the
-same state, on the same episodes, the built-in CBP and this package produce identical weights,
+An equivalence test showed the two were the same mechanism while both existed: from the same
+state, on the same episodes, the built-in CBP and this package produced identical weights,
 optimiser state, CBP state and `cbp_*` metrics, with units replaced, for `mlp`, `jepa`, `lstm`
-under `recurrent` scope, `metrics_only`, and `fire_on: "iteration"` with `compensate_mean`.
+under `recurrent` scope, `metrics_only`, and `fire_on: "iteration"` with `compensate_mean`. It
+was removed once gym-CDA no longer had a built-in CBP to compare with (CHANGELOG, Unreleased);
+`tests/test_lop_reference.py` now compares against the authors' own implementation instead.
 
 ## A checkpoint
 

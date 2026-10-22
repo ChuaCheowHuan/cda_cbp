@@ -13,6 +13,15 @@
 - **`count_rule` setting, `arxiv` by default.** A step replaces every whole unit the accumulator
   holds (arXiv Algorithms 1 and 2); `nature` keeps the old cap of one per layer per step, and is
   what a settings block without the key means.
+- **Reference test against the authors' code.** `tests/test_lop_reference.py` runs this package's
+  generate-and-test beside `lop.algos.gnt.GnT` for 60 steps and finds the same replacements, ages,
+  utility ranking, network and Adam state. It also pins that lop's apparent bias compensation adds
+  nothing (the unit's running mean is zeroed first).
+- **Equivalence test removed.** `tests/test_equivalence.py` compared against gym-CDA's built-in
+  CBP, which no longer exists, so it only ever skipped.
+- **`effective_rank` is gym-CDA's.** The `cbp_batch_effective_rank` metric calls
+  `train.probe.rank.effective_rank` (NaN for fewer than two rows) instead of a torch copy. Needs a
+  gym-CDA with that function's `too_few_rows` argument and `optim_learner.adam_settings`.
 - **Init bound from `lop`.** A replaced feed-forward unit's incoming weights use the authors'
   `get_layer_bound` rather than a copy of it.
 

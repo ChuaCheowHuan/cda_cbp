@@ -50,7 +50,7 @@ third_party/loss-of-plasticity checkout <sha>`, commit the submodule, and let CI
 | `test_cbp.py` | The algorithm with no Ray and no `Algorithm`: discovery (matching the layers recorded on gym-CDA at f7c1353), utility, replacement, accumulator, determinism, state, metrics, device placement, DDP unwrapping, mean compensation, the learner-count rule |
 | `test_cbp_recurrent.py` | CBP on an LSTM core under `scope: "recurrent"` |
 | `test_wiring.py` | A real gym-CDA `Algorithm`: composition over the encoder's Learner and outermost, real updates, metrics-only, checkpoint state, a real save and restore, and the resume guards |
-| `test_equivalence.py` | The gate for removing CBP from gym-CDA (see [migration.md](migration.md)). Skipped against a gym-CDA without built-in CBP |
+| `test_lop_reference.py` | Step by step against the authors' `lop.algos.gnt.GnT` on the same network, data and `AdamGnT`: the same units replaced, ages, utility ranking, network and Adam state (timestep included) |
 | `test_extension.py` | The package as gym-CDA sees it: discovery, defaults, validation, legacy settings |
 | `test_lop.py` | The `lop` modules used import, are the pinned submodule's files unchanged, and `lop.envs` is not installed |
 | `test_count_rule.py` | The `arxiv` rule replaces every whole unit the accumulator holds, `nature` at most one, a missing `count_rule` means `nature`, and the init bound is `lop`'s `get_layer_bound` |

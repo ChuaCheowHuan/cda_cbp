@@ -44,7 +44,8 @@ every setting.
 | Learners | `num_learners` 0 or 1 when replacing; any number with `metrics_only` |
 | Composition | wraps every other extension's Learner mixin (`learner_order` 100); keeps the MoE and JEPA loss terms |
 | Resumes | the settings are fixed for a run; checkpoints written with gym-CDA's built-in CBP resume with it on |
-| Tuned Adam | not here: `adam_betas` and `adam_weight_decay` are gym-CDA settings, independent of CBP |
+| Optimiser | when replacing, the authors' `AdamGnT` (from the bundled, unchanged `lop` code), so a replacement resets Adam's timestep per weight; `"optimizer": "torch_adam"` keeps torch Adam |
+| Tuned Adam | not here: `adam_betas` and `adam_weight_decay` are gym-CDA settings, used by either optimiser |
 
 ## Read the metrics before believing it works
 
