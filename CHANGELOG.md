@@ -10,6 +10,9 @@
   replaced weights' timestep as well as both moments, as arXiv Algorithm 2 specifies.
   `torch_adam` keeps the old behaviour. A settings block without the key (a checkpoint written
   before it) means `torch_adam`, so a resumed run trains as it did.
+- **Tuned Adam keeps AdamGnT.** A run that sets gym-CDA's `adam_betas` or `adam_weight_decay`
+  still trains with `AdamGnT`, with those values; it needs the gym-CDA that composes tuned Adam
+  inside the extensions (gym-CDA #335). `test_adam_gnt.py` checks the optimiser's type both ways.
 - **`count_rule` setting, `arxiv` by default.** A step replaces every whole unit the accumulator
   holds (arXiv Algorithms 1 and 2); `nature` keeps the old cap of one per layer per step, and is
   what a settings block without the key means.
