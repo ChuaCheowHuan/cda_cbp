@@ -13,9 +13,17 @@
 - **Tuned Adam keeps AdamGnT.** A run that sets gym-CDA's `adam_betas` or `adam_weight_decay`
   still trains with `AdamGnT`, with those values; it needs the gym-CDA that composes tuned Adam
   inside the extensions (gym-CDA #335). `test_adam_gnt.py` checks the optimiser's type both ways.
-- **`count_rule` setting, `arxiv` by default.** A step replaces every whole unit the accumulator
-  holds (arXiv Algorithms 1 and 2); `nature` keeps the old cap of one per layer per step, and is
-  what a settings block without the key means.
+- **`count_rule` setting, `arxiv` by default.** `arxiv` follows arXiv Algorithms 1 and 2: the
+  counter grows by `n_l · ρ` (the layer's width) while any unit is eligible, and a step replaces
+  every whole unit it holds. `lop` is the authors' GnT with `accumulate=True`, which grows it by
+  `|eligible| · ρ` and so replaces more slowly while units mature; `arxiv` meant this until #2.
+  `nature` keeps the old cap of one per layer per step, and is what a settings block without the
+  key means.
+- **Heads other extensions add are reset too.** A replacement zeroes the new unit's outgoing
+  weights in every head gym-CDA reports for the trunk, `TrunkOutput.extra_heads` included, so
+  cda-discorl's `aux_pi` and `disco_heads` no longer read a replaced unit with the old unit's
+  weights (#3). `tests/test_extra_heads.py`.
+- **Needs gym-CDA 2.1** (`>=2.1,<3`), for `extra_trunk_heads` and lazy extension loading (#4).
 - **Reference test against the authors' code.** `tests/test_lop_reference.py` runs this package's
   generate-and-test beside `lop.algos.gnt.GnT` for 60 steps and finds the same replacements, ages,
   utility ranking, network and Adam state. It also pins that lop's apparent bias compensation adds

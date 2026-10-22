@@ -52,7 +52,7 @@ import torch
 import torch.nn as nn
 from lop.algos.cbp_linear import get_layer_bound
 
-from gym_continuousDoubleAuction.train.model.layout import trunk_outputs
+from gym_continuousDoubleAuction.train.model.layout import TrunkOutput, trunk_outputs
 from gym_continuousDoubleAuction.train.probe.rank import effective_rank as probe_effective_rank
 
 #: Utility measures, in the order Appendix C ablates them.
@@ -114,19 +114,27 @@ FIRE_ON = ("adam_step", "iteration")
 #:                it (a checkpoint's own recorded settings) means this.
 OPTIMIZERS = ("adam_gnt", "torch_adam")
 
-#: How many mature units a step replaces. Both carry the fractional counter
-#: `c += n_eligible * replacement_rate`; they differ in what a full counter buys.
+#: How many mature units a step replaces. Each carries a fractional counter `c`
+#: that grows every step on which some unit is eligible; they differ in what it
+#: grows by and in what a full counter buys.
 #:
 #: `arxiv`  - arXiv 2108.06325v3 Algorithms 1 and 2: "n_l * rho of eligible
-#:            features", every whole unit the counter holds (`floor(c)`, never
+#:            features". `c += n_l * rho`, with `n_l` the layer's width, and
+#:            every whole unit the counter holds is replaced (`floor(c)`, never
 #:            more than are eligible). The default for a new run.
-#: `nature` - the Nature paper's Algorithm 1, `if c > 1`: at most one unit per
-#:            layer per step. What every run did before this setting existed,
-#:            so a settings block without it means this.
+#: `lop`    - the authors' GnT (`lop.algos.gnt`, `accumulate=True`):
+#:            `c += |eligible| * rho`, then `floor(c)` as `arxiv`. Slower than
+#:            the paper while units are still maturing. What `arxiv` meant
+#:            before cda-cbp issue #2; kept so lop's own runs can be matched.
+#: `nature` - the Nature paper's Algorithm 1: `c += |eligible| * rho`, and
+#:            `if c > 1` at most one unit per layer per step. What every run
+#:            did before this setting existed, so a settings block without it
+#:            means this.
 #:
-#: At this project's rate (1e-4 over 256 units, 0.026 per step) the two differ
-#: only when a step lands the counter on exactly 1, or carries it past 2.
-COUNT_RULES = ("arxiv", "nature")
+#: At this project's rate (1e-4 over 256 units, 0.026 per step once every unit
+#: is mature) the three differ only while units mature, when a step lands the
+#: counter on exactly 1, or when it carries the counter past 2.
+COUNT_RULES = ("arxiv", "lop", "nature")
 
 #: Modules allowed between a layer's two Linears. Anything else means the pair
 #: is not a plain feed-forward block and is left alone.
@@ -501,6 +509,27 @@ def _head_consumers(heads: List[nn.Module], width: int) -> List[nn.Linear]:
     return consumers
 
 
+def _trunk_consumers(trunk: TrunkOutput, width: int) -> List[nn.Linear]:
+    """Every Linear that reads the trunk's output: `pi`/`vf`, then the extra heads.
+
+    An extra head is a module another extension added and declared in
+    `extra_trunk_heads` (cda-discorl's `aux_pi`, `disco_heads`). A container of
+    parallel heads (`nn.ModuleDict`, `nn.ModuleList`) contributes each of its
+    heads, since every one reads the trunk; any other module, its first Linear.
+    Leaving one out would have it read a replaced unit with the old unit's
+    weights (#3).
+    """
+    extra: List[nn.Module] = []
+    pending = list(trunk.extra_heads)
+    while pending:
+        head = pending.pop(0)
+        if isinstance(head, (nn.ModuleDict, nn.ModuleList)):
+            pending[:0] = list(head.children())
+        else:
+            extra.append(head)
+    return _head_consumers(trunk.heads, width) + _head_consumers(extra, width)
+
+
 def _trunk_head_layers(module: nn.Module) -> List[ReplaceableLayer]:
     """The layer whose units live in the trunk but whose consumer is the head.
 
@@ -539,7 +568,7 @@ def _trunk_head_layers(module: nn.Module) -> List[ReplaceableLayer]:
             continue
         activation = next((m for m in tail if isinstance(m, _ACTIVATIONS)), None)
 
-        consumers = _head_consumers(trunk.heads, children[last_linear].out_features)
+        consumers = _trunk_consumers(trunk, children[last_linear].out_features)
         if consumers:
             layers.append(
                 ReplaceableLayer(
@@ -564,7 +593,7 @@ def _recurrent_layers(module: nn.Module) -> List["RecurrentLayer"]:
         lstm = trunk.lstm
         if lstm is None or lstm.bidirectional or lstm.proj_size:
             continue
-        consumers = _head_consumers(trunk.heads, lstm.hidden_size)
+        consumers = _trunk_consumers(trunk, lstm.hidden_size)
         if consumers:
             layers.append(
                 RecurrentLayer(
@@ -847,15 +876,17 @@ def select_and_replace(
     counter, because at a replacement rate of 1e-4 over 256 units the per-step
     quantity is 0.026 and rounding it to an integer would replace nothing, ever:
 
-        c += n_eligible * replacement_rate
+        c += n_l * replacement_rate          (arxiv)
+        c += n_eligible * replacement_rate   (lop, nature)
 
-    What a full counter buys is `config.count_rule` (see `COUNT_RULES`):
-    `arxiv` replaces `floor(c)` units, the arXiv paper's "n_l * rho of eligible
-    features"; `nature` is the Nature paper's `if c > 1`, one unit per layer per
-    step however high the rate is set, which bounds how far a single step can
-    move the function. At a realistic rate the counter rarely holds more than
-    one unit, so the two agree on almost every step; `cbp_replacements` against
-    the accumulator is what shows a rate high enough for them to differ.
+    `config.count_rule` (see `COUNT_RULES`) picks what the counter grows by and
+    what a full one buys: `arxiv`, the arXiv paper's "n_l * rho of eligible
+    features", and `lop` replace `floor(c)` units; `nature` is the Nature
+    paper's `if c > 1`, one unit per layer per step however high the rate is
+    set, which bounds how far a single step can move the function. At a
+    realistic rate the counter rarely holds more than one unit, so once every
+    unit is mature the three agree on almost every step; `cbp_replacements`
+    against the accumulator is what shows a rate high enough for them to differ.
     """
     if not config.replaces:
         return []
@@ -864,7 +895,9 @@ def select_and_replace(
     n_eligible = int(eligible.sum().item())
     if n_eligible == 0:
         return []
-    state.accumulator += n_eligible * config.replacement_rate
+    # The paper counts the layer's units; lop and the Nature paper the eligible ones.
+    counted = eligible.numel() if config.count_rule == "arxiv" else n_eligible
+    state.accumulator += counted * config.replacement_rate
     if config.count_rule == "nature":
         count = 1 if state.accumulator > 1.0 else 0
     else:

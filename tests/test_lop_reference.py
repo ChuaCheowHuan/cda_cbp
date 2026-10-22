@@ -22,9 +22,10 @@ What the reference cannot check, and why it is set up this way:
   * `utility="contribution"`. lop's mean-corrected utilities subtract a running
     mean that already includes the current step; arXiv eq. 3 uses the previous
     step's, as this package does, so those rankings can differ.
-  * `count_rule="arxiv"` with lop's `accumulate=True`. lop's default
-    (`accumulate=False`) draws a coin for the fraction instead, which matches
-    neither paper.
+  * `count_rule="lop"` with lop's `accumulate=True`: GnT's counter adds
+    |eligible| * rho, where the arXiv paper's adds n_l * rho (`arxiv`). lop's
+    default (`accumulate=False`) draws a coin for the fraction instead, which
+    matches neither paper.
   * `compensate_mean=False`. lop's `gen_new_features` looks as if it moves the
     replaced unit's mean contribution into the next layer's bias, but
     `test_features` has already zeroed that unit's running mean, so it adds
@@ -106,7 +107,7 @@ def _run():
         utility_decay=DECAY,
         replacement_rate=RATE,
         maturity_threshold=MATURITY,
-        count_rule="arxiv",
+        count_rule="lop",
         optimizer="adam_gnt",
         compensate_mean=False,
     )
