@@ -50,6 +50,7 @@ from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn as nn
+from lop.algos.cbp_linear import get_layer_bound
 
 from gym_continuousDoubleAuction.train.model.layout import trunk_outputs
 
@@ -112,6 +113,20 @@ FIRE_ON = ("adam_step", "iteration")
 #:                it (a checkpoint's own recorded settings) means this.
 OPTIMIZERS = ("adam_gnt", "torch_adam")
 
+#: How many mature units a step replaces. Both carry the fractional counter
+#: `c += n_eligible * replacement_rate`; they differ in what a full counter buys.
+#:
+#: `arxiv`  - arXiv 2108.06325v3 Algorithms 1 and 2: "n_l * rho of eligible
+#:            features", every whole unit the counter holds (`floor(c)`, never
+#:            more than are eligible). The default for a new run.
+#: `nature` - the Nature paper's Algorithm 1, `if c > 1`: at most one unit per
+#:            layer per step. What every run did before this setting existed,
+#:            so a settings block without it means this.
+#:
+#: At this project's rate (1e-4 over 256 units, 0.026 per step) the two differ
+#: only when a step lands the counter on exactly 1, or carries it past 2.
+COUNT_RULES = ("arxiv", "nature")
+
 #: Modules allowed between a layer's two Linears. Anything else means the pair
 #: is not a plain feed-forward block and is left alone.
 _PASSTHROUGH = (
@@ -155,6 +170,8 @@ class CBPConfig:
     #: checkpoint is rebuilt from its own recorded settings, and one written
     #: before this key existed trained with torch Adam. See `OPTIMIZERS`.
     optimizer: str = "torch_adam"
+    #: `nature` here for the same reason; a new run's default is `arxiv`. See `COUNT_RULES`.
+    count_rule: str = "nature"
     #: Move a replaced unit's mean contribution into the next layer's bias before its
     #: outgoing weights are zeroed, so the output does not jump (docs/29 R-13, #183). Off by
     #: default: the papers' rule zeroes and leaves the bias alone, and `docs/16` section 16.13
@@ -176,6 +193,10 @@ class CBPConfig:
         if self.optimizer not in OPTIMIZERS:
             raise ValueError(
                 f"Unknown optimizer {self.optimizer!r}. Available: {', '.join(OPTIMIZERS)}."
+            )
+        if self.count_rule not in COUNT_RULES:
+            raise ValueError(
+                f"Unknown count_rule {self.count_rule!r}. Available: {', '.join(COUNT_RULES)}."
             )
         if self.fire_on not in FIRE_ON:
             raise ValueError(f"Unknown fire_on {self.fire_on!r}. Available: {', '.join(FIRE_ON)}.")
@@ -820,23 +841,20 @@ def select_and_replace(
 ) -> List[int]:
     """Replace the lowest-utility mature units; return the indices replaced.
 
-    The accumulator is the part most often got wrong, in two ways.
-
-    First, the papers do *not* say "replace `rate * n` units per step". They
-    carry a fractional counter, because at a replacement rate of 1e-4 over 256
-    units the per-step quantity is 0.026 and rounding it to an integer would
-    replace nothing, ever:
+    The accumulator is the part most often got wrong. The papers do *not* say
+    "replace `rate * n` units per step, rounded". They carry a fractional
+    counter, because at a replacement rate of 1e-4 over 256 units the per-step
+    quantity is 0.026 and rounding it to an integer would replace nothing, ever:
 
         c += n_eligible * replacement_rate
-        if c > 1:  replace argmin utility; c -= 1
 
-    Second, that is an `if`, not a `while` - Nature Algorithm 1 is explicit, and
-    it caps the damage at **one unit per layer per optimiser step** however high
-    the rate is set. Worth keeping rather than "fixing": the cap is what bounds
-    how far a single step can move the function, which is the whole reason a
-    replacement is safe to run inside PPO's minibatch loop. A rate high enough
-    to make the counter outrun the cap is a misconfiguration, and
-    `cbp_replacements` against the accumulator is what shows it.
+    What a full counter buys is `config.count_rule` (see `COUNT_RULES`):
+    `arxiv` replaces `floor(c)` units, the arXiv paper's "n_l * rho of eligible
+    features"; `nature` is the Nature paper's `if c > 1`, one unit per layer per
+    step however high the rate is set, which bounds how far a single step can
+    move the function. At a realistic rate the counter rarely holds more than
+    one unit, so the two agree on almost every step; `cbp_replacements` against
+    the accumulator is what shows a rate high enough for them to differ.
     """
     if not config.replaces:
         return []
@@ -845,22 +863,26 @@ def select_and_replace(
     n_eligible = int(eligible.sum().item())
     if n_eligible == 0:
         return []
-
     state.accumulator += n_eligible * config.replacement_rate
-    if state.accumulator <= 1.0:
+    if config.count_rule == "nature":
+        count = 1 if state.accumulator > 1.0 else 0
+    else:
+        count = min(int(state.accumulator), n_eligible)
+    if count == 0:
         return []
 
-    # +inf for ineligible units, so argmin can only land on a mature one.
+    # +inf for ineligible units, so the lowest `count` can only be mature ones.
     masked = torch.where(
         eligible,
         corrected_utility,
         torch.full_like(corrected_utility, float("inf")),
     )
-    index = int(masked.argmin().item())
-    _reinitialise(state, layer, index, generator, optimizer, config)
-    state.accumulator -= 1.0
-    state.replacements += 1
-    return [index]
+    indices = [int(i) for i in torch.topk(masked, count, largest=False).indices]
+    for index in indices:
+        _reinitialise(state, layer, index, generator, optimizer, config)
+    state.accumulator -= float(count)
+    state.replacements += count
+    return indices
 
 
 def _reinitialise(
@@ -893,12 +915,13 @@ def _reinitialise(
         weight = layer.incoming.weight
         # The incoming weights are redrawn from PyTorch's default `nn.Linear`
         # weight init, which is what RLlib's MLP leaves in place:
-        # U(-1/sqrt(fan_in), +1/sqrt(fan_in)). The bias is NOT drawn from the
+        # U(-1/sqrt(fan_in), +1/sqrt(fan_in)), the bound the authors'
+        # `get_layer_bound` gives for `init="default"`. The bias is NOT drawn from the
         # default's bias distribution: it is set to 0 below, as the continual-
         # backprop papers prescribe (and as the recurrent layer does). An encoder
         # built with a custom initialiser would need this extended; none in this
         # repo is.
-        bound = 1.0 / math.sqrt(layer.incoming.in_features)
+        bound = get_layer_bound(layer.incoming, "default", 1.0)
         fresh = torch.empty_like(weight[index]).uniform_(-bound, bound, generator=generator)
         weight[index] = fresh
         if layer.incoming.bias is not None:
