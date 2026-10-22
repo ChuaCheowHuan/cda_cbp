@@ -883,9 +883,10 @@ def select_and_replace(
     what a full one buys: `arxiv`, the arXiv paper's "n_l * rho of eligible
     features", and `lop` replace `floor(c)` units; `nature` is the Nature
     paper's `if c > 1`, one unit per layer per step however high the rate is
-    set, which bounds how far a single step can move the function. At a realistic rate the counter rarely holds more than
-    one unit, so the two agree on almost every step; `cbp_replacements` against
-    the accumulator is what shows a rate high enough for them to differ.
+    set, which bounds how far a single step can move the function. At a
+    realistic rate the counter rarely holds more than one unit, so once every
+    unit is mature the three agree on almost every step; `cbp_replacements`
+    against the accumulator is what shows a rate high enough for them to differ.
     """
     if not config.replaces:
         return []
