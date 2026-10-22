@@ -53,6 +53,7 @@ import torch.nn as nn
 from lop.algos.cbp_linear import get_layer_bound
 
 from gym_continuousDoubleAuction.train.model.layout import trunk_outputs
+from gym_continuousDoubleAuction.train.probe.rank import effective_rank as probe_effective_rank
 
 #: Utility measures, in the order Appendix C ablates them.
 #:
@@ -1007,27 +1008,14 @@ def effective_rank(activations: torch.Tensor, threshold: float = 0.99) -> float:
     network's capacity on a fixed corpus did not move at all (docs/16 §16.16).
     `train/probe/rank.py` is the version that holds the inputs still.
 
-    `train.probe.rank.effective_rank` is the same definition in numpy;
-    `test_probe.py::TestEffectiveRank.test_it_agrees_with_the_torch_definition`
-    pins that the two agree.
-
-    They differ in exactly one place, deliberately. A matrix with fewer than
-    two rows has nothing to decompose: this returns NaN, because the value goes
-    into a metric series where a plotted 0.0 reads as total collapse, and the
-    probe's version returns 0, because that value goes into a report column
-    read as a rank. The agreement test pins both answers.
+    The definition is gym-CDA's `train.probe.rank.effective_rank`, called
+    here rather than copied, so the metric and the probe cannot drift apart.
+    It differs in one argument, deliberately. A matrix with fewer than two rows
+    has nothing to decompose: this returns NaN, because the value goes into a
+    metric series where a plotted 0.0 reads as total collapse, and the probe
+    returns 0, because its value goes into a report column read as a rank.
     """
-    matrix = activations.detach()
-    if matrix.dim() > 2:
-        matrix = matrix.reshape(-1, matrix.shape[-1])
-    if matrix.numel() == 0 or matrix.shape[0] < 2:
-        return float("nan")
-    singular = torch.linalg.svdvals(matrix.float())
-    total = singular.sum()
-    if total <= 0:
-        return 0.0
-    cumulative = torch.cumsum(singular, dim=0) / total
-    return float((cumulative < threshold).sum().item() + 1)
+    return float(probe_effective_rank(activations, threshold, too_few_rows=float("nan")))
 
 
 def plasticity_metrics(
