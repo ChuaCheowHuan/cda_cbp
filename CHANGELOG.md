@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **The loss-of-plasticity code is a submodule.** `third_party/loss-of-plasticity` pins the
+  authors' repository; the wheel installs its `lop`, `lop.utils` and `lop.algos` unchanged, and
+  ships its licence. Clone with `--recurse-submodules` (docs/development.md).
+
 ## 0.1.0
 
 - **Extracted from gym-continuousDoubleAuction.** Continual Backprop (`train/model/cbp.py`,

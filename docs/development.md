@@ -8,6 +8,7 @@ cda_cbp/config.py     DEFAULTS and validate (the `cbp` settings block)
 cda_cbp/cbp.py        the algorithm; imports no RLlib, so the formulas test without an Algorithm
 cda_cbp/learner.py    CBPLearnerMixin: hooks, apply_gradients, metrics, get/set_state
 tests/                pytest; `python -m pytest -q`
+third_party/loss-of-plasticity  the authors' code, a git submodule, installed unchanged as `lop`
 .github/workflows/cda_cbp.yml  CI
 ```
 
@@ -18,9 +19,29 @@ gym-CDA is not on PyPI. Install it first (CPU torch is enough), then this packag
 ```bash
 pip install torch==2.13.0 --extra-index-url https://download.pytorch.org/whl/cpu
 pip install "gym_continuousDoubleAuction @ git+https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction"
+git clone --recurse-submodules https://github.com/ChuaCheowHuan/cda_cbp
+cd cda_cbp
 pip install -e ".[test]"
 python -m pytest -q
 ```
+
+A clone made without `--recurse-submodules` needs `git submodule update --init` before the
+install, or the build stops at the missing `third_party/loss-of-plasticity/lop` directory.
+
+## The loss-of-plasticity code (`lop`)
+
+This package imports from the loss-of-plasticity authors' code
+([ChuaCheowHuan/loss-of-plasticity](https://github.com/ChuaCheowHuan/loss-of-plasticity), a fork
+of shibhansh/loss-of-plasticity) rather than keeping copies of it. That repository's `setup.py`
+packages nothing (it has no `lop/__init__.py`, so `find_packages()` finds no package), so a pip
+dependency on it would install no code. It is therefore a git submodule pinned to one commit, and
+`pyproject.toml` maps the top-level package `lop` onto it: `lop`, `lop.utils` and `lop.algos` are
+installed byte for byte, and `lop.envs` and the experiment scripts (gym 0.23, mujoco) are not.
+`pip install git+https://github.com/ChuaCheowHuan/cda_cbp` fetches the submodule itself.
+
+To move to a newer commit of it: `git -C third_party/loss-of-plasticity fetch && git -C
+third_party/loss-of-plasticity checkout <sha>`, commit the submodule, and let CI run.
+`tests/test_lop.py` checks that the installed files are the pinned commit's, unchanged.
 
 ## Tests
 
@@ -31,6 +52,7 @@ python -m pytest -q
 | `test_wiring.py` | A real gym-CDA `Algorithm`: composition over the encoder's Learner and outermost, real updates, metrics-only, checkpoint state, a real save and restore, and the resume guards |
 | `test_equivalence.py` | The gate for removing CBP from gym-CDA (see [migration.md](migration.md)). Skipped against a gym-CDA without built-in CBP |
 | `test_extension.py` | The package as gym-CDA sees it: discovery, defaults, validation, legacy settings |
+| `test_lop.py` | The `lop` modules used import, are the pinned submodule's files unchanged, and `lop.envs` is not installed |
 | `test_docs.py` | The settings table matches `DEFAULTS`, and every relative link resolves |
 
 ## The gym-CDA contract
