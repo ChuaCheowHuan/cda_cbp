@@ -4,6 +4,7 @@ Each one pins CBP against something in gym-CDA, so it has to run where both
 are importable: here, with gym-CDA installed as a dependency.
 """
 
+import inspect
 import math
 
 import numpy as np
@@ -13,12 +14,11 @@ from cda_cbp import cbp
 from gym_continuousDoubleAuction.train.probe import rank as rank_module
 
 
-class TestEffectiveRankMatchesTheProbe:
-    """Two array libraries, one definition (gym-CDA #251, docs/24).
+class TestEffectiveRankIsTheProbes:
+    """One definition, gym-CDA's (gym-CDA #251, docs/24), called rather than copied.
 
-    `cbp.effective_rank` is torch because the Learner works in torch;
-    `probe.rank.effective_rank` is numpy because the probe harness works in
-    numpy. Nothing but this test keeps them the same measurement.
+    The metric used to keep a torch copy of `probe.rank.effective_rank`, and
+    only a test kept the two the same measurement. Now it calls the probe's.
     """
 
     def test_they_agree(self):
@@ -31,12 +31,22 @@ class TestEffectiveRankMatchesTheProbe:
         ):
             assert rank_module.effective_rank(matrix) == cbp.effective_rank(torch.tensor(matrix))
 
+    def test_no_copy_of_the_decomposition_is_kept(self):
+        source = inspect.getsource(cbp.effective_rank)
+        assert "svd" not in source and "cumsum" not in source
+
     def test_the_one_deliberate_divergence_is_the_degenerate_row_count(self):
         """Fewer than two rows: 0 in the probe's report column, NaN in a metric
         series, where 0.0 would read as total collapse."""
         for matrix in (np.empty((0, 8)), np.ones((1, 8))):
             assert rank_module.effective_rank(matrix) == 0
             assert math.isnan(cbp.effective_rank(torch.tensor(matrix)))
+
+    def test_a_tensor_that_requires_grad(self):
+        activations = torch.randn(16, 4, requires_grad=True)
+        assert cbp.effective_rank(activations) == rank_module.effective_rank(
+            activations.detach().numpy()
+        )
 
 
 class TestAReplacedUnitsBiasIsZeroed:
