@@ -1,7 +1,7 @@
 # Continual Backprop: What It Is and How It Serves gym-CDA
 
 > **Moved from gym-CDA.** This was gym-CDA's `docs/25_continual_backprop.md` until CBP moved into
-> this package; its history came with it. It is kept as written, so three things read differently
+> this package; its history came with it. It is kept as written, so four things read differently
 > now:
 >
 > - **Settings.** It names gym-CDA's old keys, `cbp_<key>` (for example `cbp_replacement_rate`). In
@@ -14,6 +14,10 @@
 >   (`train/model/optim_learner.py`). Discovery reads trunks through gym-CDA's
 >   `train/model/layout.py`.
 > - **Links.** Numbered docs are gym-CDA's and link there. Metric names (`cbp_*`) are unchanged.
+> - **Two newer settings.** `optimizer` (default `adam_gnt`) and `count_rule` (default `arxiv`)
+>   came after the move; §1 and §4.2 describe them. Everything measured here with units replaced
+>   ran with torch Adam and at most one replacement per layer per step, which is
+>   `"optimizer": "torch_adam", "count_rule": "nature"` now ([settings.md](settings.md)).
 
 It asks one question: **does Continual Backprop — backprop plus the continual, selective
 reinitialization of low-utility hidden units — have anything to offer a league-based self-play
@@ -27,8 +31,8 @@ now that it has been measured in it, is a fix for a problem this system does not
 
 **Status.** This began as a research note and is now also a description of shipped code and of a
 measurement that has been taken. §4.1 (instrumentation) and §4.2 (the mechanism) are implemented,
-off by default, in [`train/model/cbp.py`](../cda_cbp/cbp.py) and
-[`cbp_learner.py`](../cda_cbp/learner.py); §4.3 and §4.4 are
+off by default, in [`cda_cbp/cbp.py`](../cda_cbp/cbp.py) and
+[`cda_cbp/learner.py`](../cda_cbp/learner.py); §4.3 and §4.4 are
 not.
 
 **The measurement has now been run, and the answer is that the effect is not detectable here** at
