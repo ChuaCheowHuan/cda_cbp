@@ -9,7 +9,7 @@ description = "Continual Backprop for gym-continuousDoubleAuction, as an install
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "third_party/loss-of-plasticity/LICENSE"]
 # gym-CDA is not on PyPI: install it first (see README). It must carry the
 # extension point with `learner_order` and `train/model/layout.py`.
 dependencies = ["gym_continuousDoubleAuction>=2.0,<3"]
@@ -20,8 +20,15 @@ test = ["pytest"]
 [project.entry-points."gym_cda.extensions"]
 cbp = "cda_cbp:EXTENSION"
 
+# `lop` is the loss-of-plasticity authors' code, a git submodule shipped unchanged
+# as a top-level package. Only the parts used are listed: `lop.envs` and the
+# experiment scripts need gym 0.23 and mujoco. Its own setup.py packages nothing
+# (no `lop/__init__.py`), which is why it is not a pip dependency.
 [tool.setuptools]
-packages = ["cda_cbp"]
+packages = ["cda_cbp", "lop", "lop.utils", "lop.algos"]
+
+[tool.setuptools.package-dir]
+lop = "third_party/loss-of-plasticity/lop"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
