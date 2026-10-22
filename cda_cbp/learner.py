@@ -41,9 +41,11 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
+from lop.utils.AdamGnT import AdamGnT
 
 from gym_continuousDoubleAuction.logging_setup import get_logger
 from gym_continuousDoubleAuction.train.extensions import EXTENSIONS_CONFIG_KEY, settings_for
+from gym_continuousDoubleAuction.train.model.optim_learner import adam_settings
 
 from cda_cbp import config as cbp_settings
 from cda_cbp.cbp import (
@@ -105,6 +107,31 @@ class CBPLearnerMixin:
     """
 
     # --- Setup ---------------------------------------------------------------
+
+    def configure_optimizers_for_module(self, module_id, config=None) -> None:
+        """`AdamGnT` for a replacing run with `optimizer: "adam_gnt"` (arXiv Algorithm 2).
+
+        Called inside `build` (and again by RLlib on a restore), before
+        `_cbp_config` exists, so the settings are read here. Built from
+        gym-CDA's own Adam settings (`adam_settings`, the one reader of the
+        `optimizer` group), so `adam_betas` and `adam_weight_decay` mean the
+        same thing for both optimisers. Anything else - `torch_adam`,
+        `metrics_only`, which must not change the trajectory, or a checkpoint
+        whose recorded settings predate the key - defers to the Learner below,
+        which is tuned Adam or RLlib's own.
+        """
+        lcd = getattr(self.config, "learner_config_dict", None)
+        cbp_config = _as_config(lcd)
+        if not (cbp_config.replaces and cbp_config.optimizer == "adam_gnt"):
+            super().configure_optimizers_for_module(module_id, config=config)
+            return
+        params = self.get_parameters(self.module[module_id])
+        self.register_optimizer(
+            module_id=module_id,
+            optimizer=AdamGnT(params, **adam_settings(lcd)),
+            params=params,
+            lr_or_lr_schedule=config.lr,
+        )
 
     def build(self) -> None:
         super().build()

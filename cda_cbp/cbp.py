@@ -100,6 +100,18 @@ SCOPES = ("feedforward", "recurrent")
 #:               conservative placement stays available.
 FIRE_ON = ("adam_step", "iteration")
 
+#: The optimiser a replacing run trains with.
+#:
+#: `adam_gnt`   - the authors' `AdamGnT` (`lop.utils.AdamGnT`, imported, never
+#:                copied). It keeps Adam's timestep per weight, so a
+#:                replacement can reset it for exactly the replaced weights,
+#:                as arXiv Algorithm 2 specifies. The default for a new run.
+#: `torch_adam` - `torch.optim.Adam`, which keeps one timestep per tensor: the
+#:                moments are reset, the timestep cannot be. What every run
+#:                did before this setting existed, so a settings block without
+#:                it (a checkpoint's own recorded settings) means this.
+OPTIMIZERS = ("adam_gnt", "torch_adam")
+
 #: Modules allowed between a layer's two Linears. Anything else means the pair
 #: is not a plain feed-forward block and is left alone.
 _PASSTHROUGH = (
@@ -139,6 +151,10 @@ class CBPConfig:
     scope: str = "feedforward"
     fire_on: str = "adam_step"
     reset_optimizer_state: bool = True
+    #: `torch_adam` here, not the `adam_gnt` of a new run's defaults: a
+    #: checkpoint is rebuilt from its own recorded settings, and one written
+    #: before this key existed trained with torch Adam. See `OPTIMIZERS`.
+    optimizer: str = "torch_adam"
     #: Move a replaced unit's mean contribution into the next layer's bias before its
     #: outgoing weights are zeroed, so the output does not jump (docs/29 R-13, #183). Off by
     #: default: the papers' rule zeroes and leaves the bias alone, and `docs/16` section 16.13
@@ -157,6 +173,10 @@ class CBPConfig:
             )
         if self.scope not in SCOPES:
             raise ValueError(f"Unknown scope {self.scope!r}. Available: {', '.join(SCOPES)}.")
+        if self.optimizer not in OPTIMIZERS:
+            raise ValueError(
+                f"Unknown optimizer {self.optimizer!r}. Available: {', '.join(OPTIMIZERS)}."
+            )
         if self.fire_on not in FIRE_ON:
             raise ValueError(f"Unknown fire_on {self.fire_on!r}. Available: {', '.join(FIRE_ON)}.")
         if not 0.0 <= self.utility_decay < 1.0:
@@ -264,8 +284,18 @@ class ReplaceableLayer:
         return float(self.incoming.weight.detach().abs().mean().item())
 
 
-#: Adam's per-element moment buffers, the slots a replacement has to clear.
-_ADAM_SLOTS = ("exp_avg", "exp_avg_sq", "max_exp_avg_sq")
+def _per_weight_slots(slots: Dict[str, Any], param: torch.Tensor) -> List[torch.Tensor]:
+    """The optimiser buffers that hold one entry per weight of `param`.
+
+    Adam's moments (and AMSGrad's maximum) always; the timestep too under
+    `AdamGnT`, which keeps it per weight. torch Adam's timestep is a scalar for
+    the whole tensor and is left alone: it cannot be reset for one unit.
+    """
+    return [
+        value
+        for value in slots.values()
+        if isinstance(value, torch.Tensor) and value.shape == param.shape
+    ]
 
 
 @dataclass
@@ -380,7 +410,7 @@ class RecurrentLayer:
                 out.weight[:, index] = 0.0
 
     def reset_optimizer_slots(self, optimizer: torch.optim.Optimizer, index: int) -> None:
-        """Zero Adam's moments for every entry `reinitialise` just reset."""
+        """Zero Adam's per-weight state for every entry `reinitialise` just reset."""
         h = self.lstm.hidden_size
         rows = [g * h + index for g in range(4)]
         targets = [("weight_ih", rows, None), ("weight_hh", rows, None), ("weight_hh", None, index)]
@@ -388,23 +418,15 @@ class RecurrentLayer:
             targets += [("bias_ih", rows, None), ("bias_hh", rows, None)]
         with torch.no_grad():
             for kind, row_idx, col_idx in targets:
-                slots = optimizer.state.get(self._p(kind))
-                if not slots:
-                    continue
-                for key in _ADAM_SLOTS:
-                    if key not in slots:
-                        continue
+                param = self._p(kind)
+                for buffer in _per_weight_slots(optimizer.state.get(param) or {}, param):
                     if row_idx is not None:
-                        slots[key][row_idx] = 0.0
+                        buffer[row_idx] = 0.0
                     else:
-                        slots[key][:, col_idx] = 0.0
+                        buffer[:, col_idx] = 0.0
             for out in self.outgoing:
-                slots = optimizer.state.get(out.weight)
-                if not slots:
-                    continue
-                for key in _ADAM_SLOTS:
-                    if key in slots:
-                        slots[key][:, index] = 0.0
+                for buffer in _per_weight_slots(optimizer.state.get(out.weight) or {}, out.weight):
+                    buffer[:, index] = 0.0
 
 
 # --- Layer discovery --------------------------------------------------------
@@ -910,42 +932,30 @@ def _reset_optimizer_slots(
     optimizer: torch.optim.Optimizer, layer: ReplaceableLayer, index: int
 ) -> None:
     # (A `RecurrentLayer` clears its own slots; see `_reinitialise`.)
-    """Zero Adam's moment estimates for the weights a replacement just reset.
+    """Zero Adam's per-weight state for the weights a replacement just reset.
 
-    arXiv Algorithm 2: a reinitialised weight that inherits a large second
+    arXiv Algorithm 2: both moment estimates and the timestep of every reset
+    weight go to zero. A reinitialised weight that inherits a large second
     moment takes tiny steps and stays dead, which would defeat the point of
-    replacing it.
+    replacing it; the timestep restarts its bias correction.
 
-    **Documented deviation.** Algorithm 2 also resets a *per-weight timestep*
-    so Adam's bias correction restarts for that weight. `torch.optim.Adam`
-    keeps one scalar `step` per parameter tensor, not per element, so this is
-    not expressible without replacing the optimiser. The cost of omitting it:
-    the new unit's zeroed moments are bias-corrected by ~1 instead of by
-    `1 - beta`, so its effective step ramps up over roughly `1/(1 - beta_1)`
-    updates rather than being full size immediately. That is a slower start for
-    the replacement, not a wrong one.
+    Under `AdamGnT` (`optimizer: "adam_gnt"`) that is all of it. Under torch
+    Adam the timestep is one scalar per tensor and is left alone - a documented
+    deviation: the new unit's zeroed moments are then bias-corrected by ~1
+    instead of by `1 - beta`, so its effective step ramps up over roughly
+    `1/(1 - beta_1)` updates rather than being full size immediately. A slower
+    start for the replacement, not a wrong one.
     """
     with torch.no_grad():
-        for param, rows in (
-            (layer.incoming.weight, index),
-            (layer.incoming.bias, index),
-        ):
+        for param in (layer.incoming.weight, layer.incoming.bias):
             if param is None:
                 continue
-            slots = optimizer.state.get(param)
-            if not slots:
-                continue
-            for key in ("exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
-                if key in slots:
-                    slots[key][rows] = 0.0
+            for buffer in _per_weight_slots(optimizer.state.get(param) or {}, param):
+                buffer[index] = 0.0
 
         for out in layer.outgoing:
-            slots = optimizer.state.get(out.weight)
-            if not slots:
-                continue
-            for key in ("exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
-                if key in slots:
-                    slots[key][:, index] = 0.0
+            for buffer in _per_weight_slots(optimizer.state.get(out.weight) or {}, out.weight):
+                buffer[:, index] = 0.0
 
 
 # --- Plasticity metrics -----------------------------------------------------
