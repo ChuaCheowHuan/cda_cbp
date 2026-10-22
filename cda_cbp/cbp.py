@@ -52,7 +52,7 @@ import torch
 import torch.nn as nn
 from lop.algos.cbp_linear import get_layer_bound
 
-from gym_continuousDoubleAuction.train.model.layout import trunk_outputs
+from gym_continuousDoubleAuction.train.model.layout import TrunkOutput, trunk_outputs
 from gym_continuousDoubleAuction.train.probe.rank import effective_rank as probe_effective_rank
 
 #: Utility measures, in the order Appendix C ablates them.
@@ -509,6 +509,27 @@ def _head_consumers(heads: List[nn.Module], width: int) -> List[nn.Linear]:
     return consumers
 
 
+def _trunk_consumers(trunk: TrunkOutput, width: int) -> List[nn.Linear]:
+    """Every Linear that reads the trunk's output: `pi`/`vf`, then the extra heads.
+
+    An extra head is a module another extension added and declared in
+    `extra_trunk_heads` (cda-discorl's `aux_pi`, `disco_heads`). A container of
+    parallel heads (`nn.ModuleDict`, `nn.ModuleList`) contributes each of its
+    heads, since every one reads the trunk; any other module, its first Linear.
+    Leaving one out would have it read a replaced unit with the old unit's
+    weights (#3).
+    """
+    extra: List[nn.Module] = []
+    pending = list(trunk.extra_heads)
+    while pending:
+        head = pending.pop(0)
+        if isinstance(head, (nn.ModuleDict, nn.ModuleList)):
+            pending[:0] = list(head.children())
+        else:
+            extra.append(head)
+    return _head_consumers(trunk.heads, width) + _head_consumers(extra, width)
+
+
 def _trunk_head_layers(module: nn.Module) -> List[ReplaceableLayer]:
     """The layer whose units live in the trunk but whose consumer is the head.
 
@@ -547,7 +568,7 @@ def _trunk_head_layers(module: nn.Module) -> List[ReplaceableLayer]:
             continue
         activation = next((m for m in tail if isinstance(m, _ACTIVATIONS)), None)
 
-        consumers = _head_consumers(trunk.heads, children[last_linear].out_features)
+        consumers = _trunk_consumers(trunk, children[last_linear].out_features)
         if consumers:
             layers.append(
                 ReplaceableLayer(
@@ -572,7 +593,7 @@ def _recurrent_layers(module: nn.Module) -> List["RecurrentLayer"]:
         lstm = trunk.lstm
         if lstm is None or lstm.bidirectional or lstm.proj_size:
             continue
-        consumers = _head_consumers(trunk.heads, lstm.hidden_size)
+        consumers = _trunk_consumers(trunk, lstm.hidden_size)
         if consumers:
             layers.append(
                 RecurrentLayer(
