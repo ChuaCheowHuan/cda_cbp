@@ -23,7 +23,7 @@ pip install "gym_continuousDoubleAuction @ git+https://github.com/ChuaCheowHuan/
 pip install "git+https://github.com/ChuaCheowHuan/cda_cbp"
 ```
 
-Installing changes no run.
+pip fetches the `lop` submodule (the authors' code, below) itself. Installing changes no run.
 
 ## Enable
 
@@ -62,8 +62,10 @@ migration and development.
 
 ## Compatibility
 
-Needs a gym-CDA with `learner_order` in its extension point and `train/model/layout.py`. CI tests
-against the ref in [.github/workflows/cda_cbp.yml](.github/workflows/cda_cbp.yml).
+Needs gym-CDA 2.1 or later (`gym_continuousDoubleAuction>=2.1,<3`): 2.1.0 reads the heads other
+extensions declare in `extra_trunk_heads`, and imports an installed extension only for a run that
+enables it. [docs/development.md](docs/development.md) lists what this package uses from gym-CDA.
+CI tests against the ref in [.github/workflows/cda_cbp.yml](.github/workflows/cda_cbp.yml).
 
 ## License
 

@@ -9,8 +9,10 @@ key not listed here when the `TrainConfig` is built. The source of truth is
 "extension_settings": {"cbp": {"replacement_rate": 1e-4, "scope": "feedforward"}}
 ```
 
-Listing `"cbp"` turns Continual Backprop on; there is no separate `enabled` key. Each key was
-`cbp_<key>` in gym-CDA's `train_config.json` before CBP moved here, with the same default.
+Listing `"cbp"` turns Continual Backprop on; there is no separate `enabled` key. Each key but
+`optimizer` and `count_rule` was `cbp_<key>` in gym-CDA's `train_config.json` before CBP moved here,
+with the same default. Those two are newer, and their defaults are not what the built-in version
+did: `"optimizer": "torch_adam", "count_rule": "nature"` repeats it.
 
 | Key | Default | Meaning |
 |---|---|---|

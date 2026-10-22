@@ -56,6 +56,7 @@ third_party/loss-of-plasticity checkout <sha>`, commit the submodule, and let CI
 | `test_count_rule.py` | The `arxiv` counter grows by `n_l · ρ` and `lop`'s by the eligible count, both replace every whole unit it holds, `nature` at most one, a missing `count_rule` means `nature`, and the init bound is `lop`'s `get_layer_bound` |
 | `test_extra_heads.py` | Heads another extension declares in `extra_trunk_heads` are consumers of the trunk's last layer, on MLP and LSTM trunks, and a replacement zeroes the unit in each |
 | `test_adam_gnt.py` | `AdamGnT`'s per-weight timestep is reset with the moments for exactly the replaced slices, torch Adam is left alone, a missing `optimizer` means `torch_adam`, and a real `Algorithm` builds the optimiser asked for |
+| `test_moved_checks.py` | Checks that lived in gym-CDA's suite until CBP moved: the rank metric calls gym-CDA's `effective_rank` (NaN below two rows) and keeps no copy, and a replaced unit's bias is zeroed |
 | `test_docs.py` | The settings table matches `DEFAULTS`, and every relative link resolves |
 
 ## The gym-CDA contract
