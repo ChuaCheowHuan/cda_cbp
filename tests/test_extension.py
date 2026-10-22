@@ -23,7 +23,7 @@ def test_it_wraps_outside_every_default_ordered_extension():
 #: Keys whose `CBPConfig` value is the legacy one on purpose: a checkpoint is
 #: rebuilt from its own recorded settings, and one written before the key
 #: existed must keep behaving as it did. A new run gets the block's default.
-LEGACY_WHEN_MISSING = {"optimizer": "torch_adam"}
+LEGACY_WHEN_MISSING = {"optimizer": "torch_adam", "count_rule": "nature"}
 
 
 def test_the_defaults_are_the_algorithms_defaults():
@@ -33,7 +33,7 @@ def test_the_defaults_are_the_algorithms_defaults():
 
 
 def test_only_the_legacy_keys_differ():
-    assert DEFAULTS["optimizer"] == "adam_gnt"
+    assert DEFAULTS["optimizer"] == "adam_gnt" and DEFAULTS["count_rule"] == "arxiv"
     for key, legacy in LEGACY_WHEN_MISSING.items():
         assert getattr(CBPConfig(enabled=True), key) == legacy
 

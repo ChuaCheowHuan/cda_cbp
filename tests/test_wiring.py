@@ -153,17 +153,19 @@ class TestCBPRunsInsideARealUpdate:
         )
         assert total > 0
 
-    def test_at_most_one_replacement_per_layer_per_step(self):
-        """The `if c > 1` cap, observed through a real update.
+    def test_no_layer_replaces_more_than_the_rate_allows(self):
+        """The accumulator's bound, observed through a real update.
 
-        `_cbp_updates` counts optimiser steps; no layer may have replaced more
-        units than there were steps.
+        `_cbp_updates` counts optimiser steps. Under either count rule a layer
+        replaces at most the whole units its counter has collected, which is
+        never more than `steps * replacement_rate * num_units`.
         """
         steps = self.learner._cbp_updates
         assert steps > 0
+        rate = self.learner._cbp_config.replacement_rate
         for layers in self.learner._cbp_state.values():
             for state in layers.values():
-                assert state.replacements <= steps
+                assert state.replacements <= steps * rate * state.age.numel()
 
     def test_the_metrics_are_logged_per_module(self):
         learners = self.result["learners"]
