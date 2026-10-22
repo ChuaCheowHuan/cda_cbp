@@ -35,6 +35,8 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+# The authors' code, shipped unchanged (tests/test_lop.py); never reformat it.
+extend-exclude = ["third_party"]
 
 [tool.ruff.format]
 quote-style = "preserve"
