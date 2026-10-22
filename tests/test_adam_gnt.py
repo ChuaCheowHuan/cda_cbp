@@ -188,8 +188,11 @@ class TestTheLearnerBuildsTheOptimiser:
         assert optimizers and all(type(o) is AdamGnT for o in optimizers.values())
 
     def test_with_gym_cdas_adam_settings(self):
+        """Tuned Adam set as well must not swap AdamGnT for torch's Adam (#335 review)."""
         optimizers = _optimizers(dict(**cbp(), adam_betas=[0.99, 0.99], adam_weight_decay=1e-4))
+        assert optimizers
         for optimizer in optimizers.values():
+            assert type(optimizer) is AdamGnT
             group = optimizer.param_groups[0]
             assert tuple(group["betas"]) == (0.99, 0.99)
             assert group["weight_decay"] == 1e-4
