@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **The `jepa` tests use whichever package provides `jepa`.** gym-CDA's own `jepa` (2.2 and
+  earlier) or cda-jepa's, which the test extra now installs. The JEPA Learner is looked up
+  through gym-CDA's registry instead of imported from `gym_continuousDoubleAuction.train.model.jepa_learner`,
+  a config selecting cda-jepa's `jepa` enables its extension, and without either the tests skip
+  (`tests/conftest.py`, `requires_jepa`). The research note links point at cda-jepa's `docs/jepa.md`.
+
 ## 0.2.0
 
 - **Version 0.2.0.** gym-CDA records this beside every checkpoint that enables `cbp`. Checkpoints
