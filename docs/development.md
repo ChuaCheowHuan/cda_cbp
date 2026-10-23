@@ -59,6 +59,9 @@ third_party/loss-of-plasticity checkout <sha>`, commit the submodule, and let CI
 | `test_moved_checks.py` | Checks that lived in gym-CDA's suite until CBP moved: the rank metric calls gym-CDA's `effective_rank` (NaN below two rows) and keeps no copy, and a replaced unit's bias is zeroed |
 | `test_docs.py` | The settings table matches `DEFAULTS`, and every relative link resolves |
 
+The `jepa` cases need a `jepa` encoder: gym-CDA's own (2.2 and earlier) or cda-jepa's, which
+`.[test]` installs. Without one they skip (`requires_jepa` in `tests/conftest.py`).
+
 ## The gym-CDA contract
 
 This package relies on gym-CDA for:

@@ -21,9 +21,8 @@ import tempfile
 import pytest
 import ray
 import torch
-from conftest import TEST_CFG, cbp
+from conftest import TEST_CFG, cbp, jepa_learner, requires_jepa, with_jepa
 
-from gym_continuousDoubleAuction.train.model.jepa_learner import CDAJEPALearner
 from gym_continuousDoubleAuction.train.model.moe_learner import CDAPPOTorchLearner
 from gym_continuousDoubleAuction.train.model.optim_learner import TunedAdamMixin
 from gym_continuousDoubleAuction.train.train import (
@@ -52,21 +51,24 @@ class TestCompositionPreservesTheEncodersLearner:
         cfg = TrainConfig(**TEST_CFG)
         assert _learner_class(cfg) is CDAPPOTorchLearner
 
+    @requires_jepa
     def test_off_resolves_to_the_encoders_learner_for_jepa(self):
-        cfg = TrainConfig(**TEST_CFG)
-        cfg.encoder_type = "jepa"
-        assert _learner_class(cfg) is CDAJEPALearner
+        cfg = TrainConfig(**with_jepa(**TEST_CFG))
+        assert _learner_class(cfg) is jepa_learner()
 
-    @pytest.mark.parametrize(
-        "encoder_type, base", [("mlp", CDAPPOTorchLearner), ("jepa", CDAJEPALearner)]
-    )
-    def test_the_loss_still_comes_from_the_base(self, encoder_type, base):
+    @pytest.mark.parametrize("encoder_type", ["mlp", pytest.param("jepa", marks=requires_jepa)])
+    def test_the_loss_still_comes_from_the_base(self, encoder_type):
         """The MoE and JEPA terms must survive the composition.
 
         `compute_loss_for_module` is where both live; the mixin overrides the
         update path and the checkpoint, and must leave the loss alone.
         """
-        composed = _learner_class(TrainConfig(**TEST_CFG, **FIRING_CFG, encoder_type=encoder_type))
+        config = dict(TEST_CFG, **FIRING_CFG)
+        if encoder_type == "jepa":
+            config, base = with_jepa(**config), jepa_learner()
+        else:
+            base = CDAPPOTorchLearner
+        composed = _learner_class(TrainConfig(**config))
         assert composed.compute_loss_for_module is base.compute_loss_for_module
         assert CBPLearnerMixin in composed.__mro__
         assert composed.__mro__.index(CBPLearnerMixin) < composed.__mro__.index(base)
@@ -76,12 +78,12 @@ class TestCompositionPreservesTheEncodersLearner:
         composed = _learner_class(TrainConfig(**TEST_CFG, **FIRING_CFG))
         assert composed.__mro__[1] is CBPLearnerMixin
 
+    @requires_jepa
     def test_cbp_on_with_jepa_keeps_the_jepa_learner(self):
-        cfg = TrainConfig(**TEST_CFG, **FIRING_CFG)
-        cfg.encoder_type = "jepa"
+        cfg = TrainConfig(**with_jepa(**TEST_CFG, **FIRING_CFG))
         composed = _learner_class(cfg)
-        assert CDAJEPALearner in composed.__mro__
-        assert composed.compute_loss_for_module is CDAJEPALearner.compute_loss_for_module
+        assert jepa_learner() in composed.__mro__
+        assert composed.compute_loss_for_module is jepa_learner().compute_loss_for_module
 
 
 class TestTunedAdamComposesWithCBP:

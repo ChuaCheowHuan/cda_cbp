@@ -40,11 +40,7 @@ from cda_cbp.cbp import (
     update_utility,
 )
 from cda_cbp.learner import CBP_STATE, CBPLearnerMixin
-from gym_continuousDoubleAuction.train.model.encoders import (
-    ENCODER_REGISTRY,
-    MLP_ENCODER_TYPE,
-)
-from conftest import build_module, cbp
+from conftest import build_module, cbp, encoder_types, jepa_available, requires_jepa
 
 
 def simple_block(fan_in=6, units=5, fan_out=3):
@@ -110,6 +106,7 @@ class TestLayerDiscovery:
         last = max(layers, key=lambda layer: layer.name)
         assert sorted(out.out_features for out in last.outgoing) == [1, 29]
 
+    @requires_jepa
     def test_frozen_layers_are_skipped(self, spaces):
         """The `jepa` encoder's EMA target trunk must not be replaceable.
 
@@ -125,7 +122,7 @@ class TestLayerDiscovery:
         assert not any("target_trunk" in name for name in names)
         assert any("trunk" in name for name in names)
 
-    @pytest.mark.parametrize("encoder_type", [MLP_ENCODER_TYPE] + sorted(ENCODER_REGISTRY))
+    @pytest.mark.parametrize("encoder_type", encoder_types())
     def test_discovery_runs_on_every_encoder(self, spaces, encoder_type):
         """Discovery must never raise, whatever the architecture.
 
@@ -953,8 +950,11 @@ class TestDiscoveryMatchesTheRecordedLayers:
 
         with open(self.FIXTURE) as fh:
             recorded = json.load(fh)
+        if not jepa_available():
+            # `jepa` left gym-CDA for cda-jepa; its rows are checked when that is installed.
+            recorded = {k: v for k, v in recorded.items() if not k.startswith("jepa|")}
         got = {}
-        for encoder_type in [MLP_ENCODER_TYPE] + sorted(ENCODER_REGISTRY):
+        for encoder_type in encoder_types():
             for share in (False, True):
                 module = build_module(spaces, encoder_type, vf_share_layers=share)
                 path = {id(m): n for n, m in module.named_modules()}

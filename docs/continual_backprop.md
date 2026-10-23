@@ -24,7 +24,7 @@ reinitialization of low-utility hidden units — have anything to offer a league
 trainer whose opponents change under it by construction?**
 
 The answer is a qualified yes, and the qualification is different from the one in
-[22_jepa_integration.md](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/22_jepa_integration.md). JEPA was a good fit for *this observation* and a
+[cda-jepa's docs/jepa.md](https://github.com/ChuaCheowHuan/cda_jepa/blob/main/docs/jepa.md). JEPA was a good fit for *this observation* and a
 poor fit for *this reward*. Continual Backprop is a good fit for *this training regime* and,
 now that it has been measured in it, is a fix for a problem this system does not yet have: at
 ~20,000 optimiser steps the effect is not detectable (§3.3).
@@ -272,7 +272,7 @@ for every encoder.
 
 ### 2.3 The budget this project needs is the regime where plasticity loss appears
 
-[22](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/22_jepa_integration.md) §2.3 records the gap: the default budget is ~262k env steps
+[cda-jepa's docs/jepa.md](https://github.com/ChuaCheowHuan/cda_jepa/blob/main/docs/jepa.md) §2.3 records the gap: the default budget is ~262k env steps
 (`num_iters: 16`) against a realistic need of 10⁷–10⁸. Plasticity loss is a *long-run* failure. It
 does not show up in 16 iterations, and it is precisely what degrades a run that has been scaled up
 to the length this project knows it needs.
@@ -500,7 +500,7 @@ there is nothing here yet for the mechanism to fix, and switching it on would be
 patient who is not ill.
 
 Shipping the mechanism before measuring the disease would have been backwards, which is the
-mistake [22](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/22_jepa_integration.md) avoided by putting a pure instrument first. §4.1 did the
+mistake [cda-jepa's docs/jepa.md](https://github.com/ChuaCheowHuan/cda_jepa/blob/main/docs/jepa.md) avoided by putting a pure instrument first. §4.1 did the
 same — and §3.8 is what happened when the instrument itself turned out to need one.
 
 ### 3.4 "Unit" is unambiguous in some places in this codebase and not in others
