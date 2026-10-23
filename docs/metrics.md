@@ -2,7 +2,7 @@
 
 Emitted per trainable module by `CBPLearnerMixin` when the `cbp` extension is enabled, with or
 without `metrics_only`, through the same `self.metrics.log_dict(..., key=module_id, window=1)` path
-gym-CDA's MoE and JEPA terms use. Absent entirely when the extension is not enabled. Full context
+gym-CDA's MoE term and cda-jepa's JEPA terms use. Absent entirely when the extension is not enabled. Full context
 in [continual_backprop.md](continual_backprop.md) §4.1.
 
 The first three are the **three correlates of loss of plasticity** both papers track. The Nature
@@ -28,7 +28,7 @@ rather than emitted per layer, which would be 80 series for a 16-layer `moe_tran
 **The two that decide whether any of the others mean anything** are `cbp_replacements` and
 `cbp_mature_unit_frac`. A continual backprop that never fires — which is the *expected* outcome at
 the shipped replacement rate over a short run, for the cadence reason in
-[18 §5.6.4](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/18_configuration.md) — logs exactly what a working one logs. Read those two first.
+[continual_backprop.md](continual_backprop.md) §3.6 — logs exactly what a working one logs. Read those two first.
 
 `cbp_batch_effective_rank` runs an SVD and is therefore computed every `metrics_every_n_updates`
 optimiser steps rather than every one; the same counter gates keeping an activation sample in the
@@ -48,7 +48,7 @@ own it is a textbook plasticity collapse; it is the agent's behaviour.
 It is kept because "what the network is doing on the data it is training on" is a real thing to
 want, and it is named for the batch it is measured on rather than for what it looks like it
 measures. **For a statement about the network, use `train/probe/rank.py`** across checkpoints
-([23](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/23_probe_harness.md) §8), where the corpus is fixed while the encoder varies.
+([23](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/23_probe_harness.md) §10), where the corpus is fixed while the encoder varies.
 
 The other two correlates are robust to this — weights do not depend on the batch, and a unit dead
 on one input distribution is generally dead on others — but both read zero on the shipped network
