@@ -1,23 +1,11 @@
 # Continual Backprop: What It Is and How It Serves gym-CDA
 
 > **Moved from gym-CDA.** This was gym-CDA's `docs/25_continual_backprop.md` until CBP moved into
-> this package; its history came with it. It is kept as written, so four things read differently
-> now:
->
-> - **Settings.** It names gym-CDA's old keys, `cbp_<key>` (for example `cbp_replacement_rate`). In
->   this package the same setting is `<key>` under `extension_settings["cbp"]`, and setting
->   `cbp_enabled: true` is now listing `"cbp"` in `extensions_enabled`
->   ([settings.md](settings.md), [migration.md](migration.md)).
-> - **Code.** `cbp.py` and `cbp_learner.py` are [`cda_cbp/cbp.py`](../cda_cbp/cbp.py) and
->   [`cda_cbp/learner.py`](../cda_cbp/learner.py). gym-CDA composes the mixin through its extension
->   point rather than `with_continual_backprop`, and tuned Adam (`TunedAdamMixin`) stayed in gym-CDA
->   (`train/model/optim_learner.py`). Discovery reads trunks through gym-CDA's
->   `train/model/layout.py`.
-> - **Links.** Numbered docs are gym-CDA's and link there. Metric names (`cbp_*`) are unchanged.
-> - **Two newer settings.** `optimizer` (default `adam_gnt`) and `count_rule` (default `arxiv`)
->   came after the move; §1 and §4.2 describe them. Everything measured here with units replaced
->   ran with torch Adam and at most one replacement per layer per step, which is
->   `"optimizer": "torch_adam", "count_rule": "nature"` now ([settings.md](settings.md)).
+> this package, and it keeps that document's section numbers. Settings are named as they are now,
+> under `extension_settings["cbp"]` ([settings.md](settings.md)); the old `cbp_<key>` names are in
+> [migration.md](migration.md). Numbered docs (`[18]`, `[29]` and so on) are gym-CDA's. Everything
+> measured here with units replaced ran with torch Adam and at most one replacement per layer per
+> step, which is `"optimizer": "torch_adam", "count_rule": "nature"` now.
 
 It asks one question: **does Continual Backprop — backprop plus the continual, selective
 reinitialization of low-utility hidden units — have anything to offer a league-based self-play
@@ -114,7 +102,7 @@ activation (`|h_i - f̂_i|`, because gradient descent transfers the mean part of
 contribution to the consumer's bias anyway), then divide by `Σ_j |w_in|` — the *adaptation* utility,
 on the grounds that under Adam a unit with small incoming weights can change its function faster
 and so is worth more than its contribution alone suggests. Appendix C ablates all of them and finds
-the full form best, including on the RL problem, which is why `cbp_utility: "overall"` is the
+the full form best, including on the RL problem, which is why `utility: "overall"` is the
 default here and the other two are selectable.
 
 ```mermaid
@@ -347,35 +335,29 @@ class CBPLearnerMixin:
             self._cbp_run()
 ```
 
-and a single composition point in `train.py`, applied *after* `learner_class_for` has done its job:
+and composed over whichever Learner the encoder selected. As shipped, the package declares the
+mixin to gym-CDA's extension point ([30](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/30_extensions.md)),
+and gym-CDA's `_learner_class`
+([`train/build.py`](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/gym_continuousDoubleAuction/train/build.py))
+composes it when a run lists `"cbp"` in `extensions_enabled`:
 
 ```python
-base = learner_class_for(cfg.encoder_type, CDAPPOTorchLearner)
-learner_cls = with_continual_backprop(base) if cbp else base
+EXTENSION = Extension(name="cbp", learner_mixin=CBPLearnerMixin, learner_order=100, ...)
 ```
-
-`with_continual_backprop` builds `type(f"CBP{base.__name__}", (CBPLearnerMixin, base), {})` — so
-the MoE term, the JEPA term and CBP all survive together, and every existing encoder resolves to
-exactly what it resolves to today when CBP is off. This is the same isolation property
-`jepa` was held to, obtained a different way because the mechanism is a different *kind* of thing.
-
-As shipped, in `_learner_class` ([`train/build.py`](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/gym_continuousDoubleAuction/train/build.py))
-and `with_continual_backprop`
-([`cbp_learner.py`](../cda_cbp/learner.py)):
 
 ```mermaid
 flowchart LR
     ET["encoder_type"] --> LCF["learner_class_for<br/>one Learner slot, chosen by the encoder"]
     LCF -->|"mlp, transformer,<br/>lstm, moe_transformer"| B1["CDAPPOTorchLearner<br/>+ MoE load-balancing term"]
-    LCF -->|"jepa"| B2["CDAJEPALearner<br/>+ latent-prediction term"]
-    B1 --> Q{"cbp_enabled or<br/>cbp_metrics_only?"}
-    B2 --> Q
-    Q -->|"yes"| W["with_continual_backprop<br/>CBPLearnerMixin (+ TunedAdamMixin if the<br/>optimizer group is non-default) + base"]
-    Q -->|"no"| T{"adam_betas or adam_weight_decay<br/>non-default?"}
-    T -->|"yes"| TA["with_tuned_adam<br/>TunedAdamMixin + base"]
-    T -.->|"no: the base class itself"| OUT["Learner RLlib builds"]
+    LCF -->|"jepa (cda-jepa)"| B2["CDAJEPALearner<br/>+ latent-prediction term"]
+    B1 --> T{"adam_betas or adam_weight_decay<br/>non-default?"}
+    B2 --> T
+    T -->|"yes"| TA["TunedAdamMixin + base"]
+    T -.->|"no"| X{"extensions_enabled"}
+    TA --> X
+    X -->|"lists cbp"| W["CBPLearnerMixin outermost<br/>(learner_order 100), over any<br/>other extension's mixin"]
+    X -.->|"none: the class itself"| OUT["Learner RLlib builds"]
     W --> OUT
-    TA --> OUT
 
     classDef learn fill:#2E4986,stroke:#1F3366,color:#fff
     classDef ledger fill:#A44029,stroke:#7A2F1E,color:#fff
@@ -383,23 +365,19 @@ flowchart LR
     class W,TA ledger
 ```
 
-| `encoder_type` | Base Learner, chosen by the encoder | With CBP on |
-|---|---|---|
-| `mlp`, `transformer`, `lstm` | `CDAPPOTorchLearner` | `CBPCDAPPOTorchLearner` |
-| `moe_transformer` | `CDAPPOTorchLearner`, whose load-balancing term only this encoder emits | `CBPCDAPPOTorchLearner` |
-| `jepa` | `CDAJEPALearner`, adding the latent-prediction term | `CBPCDAJEPALearner` |
-
 The mixin sits ahead of the base in the MRO, so `apply_gradients`, `get_state` and
 `configure_optimizers_for_module` resolve to it while `compute_loss_for_module` still resolves to
-the base. That is what keeps the MoE and JEPA loss terms. `TunedAdamMixin` composes the same way,
-on its own or alongside CBP (§5.6 of [18](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/18_configuration.md)).
+the base. That is what keeps the MoE and JEPA loss terms, and every encoder resolves to exactly
+what it resolves to without CBP when `"cbp"` is not listed. Tuned Adam (`TunedAdamMixin`) is
+gym-CDA's and composes on its own or alongside CBP (§5.6 of
+[18](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/18_configuration.md)).
 
 **Which hook it composes onto is settled in §3.1, not here, and the answer is not the one this
 section originally gave.** The first draft argued for `after_gradient_based_update` — confirmed
 against the installed RLlib (2.56.1) to run **once** per `update()`, after the whole minibatch and
 epoch loop — on the grounds that a mid-update replacement disturbs PPO's ratio. arXiv Algorithm 3
 does it per optimiser step anyway, so the shipped default is `apply_gradients` and
-`cbp_fire_on: "iteration"` keeps the once-per-update placement available. Nothing in *this*
+`fire_on: "iteration"` keeps the once-per-update placement available. Nothing in *this*
 section's argument depends on which of the two it is: both are methods on the Learner, and that is
 the claim being made.
 
@@ -446,7 +424,7 @@ one recomputed on the learner, and a replacement between minibatches moves the n
 
 So the implementation follows the paper: `apply_gradients`, which RLlib calls once per minibatch
 immediately after the optimiser step, is a one-to-one correspondence with "update using Adam;
-update using generate-and-test". `cbp_fire_on: "iteration"` keeps the conservative placement
+update using generate-and-test". `fire_on: "iteration"` keeps the conservative placement
 available for anyone who wants to measure the difference.
 
 ### 3.2 Preserved plasticity, in a reward that pays for passivity, preserves the ability to learn nothing
@@ -471,7 +449,7 @@ run, and the probe remains the cheaper first measurement.
 ### 3.3 The effect is **not** detectable here at ~20,000 optimiser steps — **[measured]**
 
 This section used to say the question was unknown. It has now been asked, with
-`cbp_metrics_only: true`, and the answer at this scale is no. Full numbers in
+`metrics_only: true`, and the answer at this scale is no. Full numbers in
 [16](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/16_verification_log.md) §16.16; the short form:
 
 | | optimiser steps | effective rank |
@@ -513,7 +491,7 @@ tiers:
 | Stock MLP `fcnet_hiddens` (`mlp`, the default) | Hidden unit between two `nn.Linear`s | **Clean.** The canonical case |
 | `blocks.feedforward` — `Linear(d_model, ff_dim) → GELU → Linear(ff_dim, d_model)` | The `ff_dim` hidden unit | **Clean.** Incoming and outgoing are both explicit |
 | `moe.py` expert FFNs, `jepa.predict` | Same two-Linear shape | **Clean** |
-| The top layer of an `nn.LSTM` core (`lstm`) | A hidden unit `i`: its four gates' rows of `weight_ih` and `weight_hh` in, its column of `weight_hh` and of the head `Linear`s out | **Covered under `cbp_scope: "recurrent"`**, see below |
+| The top layer of an `nn.LSTM` core (`lstm`) | A hidden unit `i`: its four gates' rows of `weight_ih` and `weight_hh` in, its column of `weight_hh` and of the head `Linear`s out | **Covered under `scope: "recurrent"`**, see below |
 | `token_embed.token_mlp` | `Linear → GELU` with no second `Linear` | **Not covered.** No outgoing layer to zero, so CBP skips it |
 | Attention projections (`q`, `k`, `v`, `out`) | A head dimension | **Messy.** Outgoing is entangled with the head structure |
 | Anything immediately followed by `LayerNorm` | — | **Care needed.** LayerNorm re-centres and re-scales, so a zeroed outgoing weight is function-preserving for that unit's *contribution*, but the normalisation statistics shift |
@@ -522,13 +500,13 @@ tiers:
 The sound scope for a first implementation is therefore **feed-forward hidden units only** — the
 first three rows. That covers the default MLP entirely, and covers the FFN half of every
 transformer block, which is where most of the parameters live anyway. It covers nothing in `lstm`
-under `cbp_scope: "feedforward"`: that encoder's tokenizer is `token_mlp` and its core is an
+under `scope: "feedforward"`: that encoder's tokenizer is `token_mlp` and its core is an
 `nn.LSTM`, so CBP finds 0 replaceable layers there (against 4 for `mlp` and `transformer`, 16 for
 `moe_transformer` and 6 for `jepa`), and the Learner logs a warning at build, naming the scope that
 fixes it, rather than running a no-op. Attention is explicitly excluded and should be documented as
 excluded, not silently skipped.
 
-**`cbp_scope: "recurrent"` adds the LSTM core** ([S3-32](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/29_fixed_issues.md#s3-32--continual-backprop-a-silent-no-op-on-lstm-and-its-state-in-every-weight-sync-verified-fixed)), and finds 2 layers per trainable
+**`scope: "recurrent"` adds the LSTM core** ([S3-32](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/29_fixed_issues.md#s3-32--continual-backprop-a-silent-no-op-on-lstm-and-its-state-in-every-weight-sync-verified-fixed)), and finds 2 layers per trainable
 module in `lstm` (the actor's and the critic's; 1 under `vf_share_layers`) and exactly what
 `feedforward` finds everywhere else. PyTorch stacks an LSTM's four gates, so a unit's parameters are
 scattered, and the split that makes a replacement safe is:
@@ -584,7 +562,7 @@ long, resumable runs, that is a real failure and an invisible one — the run co
 worse, and nothing reports why.
 
 So CBP state goes through `Learner.get_state` / `set_state`, pinned by a real save-and-restore in
-`integration/test_cbp_wiring.py`.
+`tests/test_wiring.py`.
 
 **The knobs themselves are a different story, and this note got it wrong first time.** It said CBP's
 settings are not `STRUCTURAL_CONFIG_KEYS` — true — and concluded that a resume may therefore
@@ -617,7 +595,7 @@ Take the Nature paper's own PPO values — `ρ = 1e-4`, `m = 1e4`, 256 units —
 - Ignoring maturity, the accumulator fills every ~39 optimiser steps ≈ every 10 iterations ≈ 1.6
   replacements per default run.
 
-Hence `cbp_maturity_threshold: 100` — the arXiv CBP default, not the Nature PPO one — and hence the
+Hence `maturity_threshold: 100` — the arXiv CBP default, not the Nature PPO one — and hence the
 cadence note in `train_config.json`.
 
 **This is also the reason `cbp_replacements` is a required metric rather than a nice one.** A
@@ -641,7 +619,7 @@ a changed config. That is the whole envelope the bugs lived outside of.
 |---|---|
 | GPU | CBP state allocated on the CPU while the module had already been moved to CUDA by `super().build()`. `h - f̂` raises on the first forward pass of any GPU run |
 | GPU, later | A CPU `torch.Generator` filling a CUDA tensor. Does not raise at build time — only when the accumulator first crosses 1.0, tens of optimiser steps in |
-| `num_learners > 1` | **Now refused** with `cbp_enabled` (config validation, [15](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/15_findings_and_recommendations.md) R-12): each learner picks the unit to replace from its own minibatch, outside the gradient, so the replicas can drift apart. `cbp_metrics_only` replaces nothing and is allowed. The row below is the earlier, separate wrapping problem. RLlib wraps each module in `TorchDDPRLModule`, which forwards no attributes, so the trunk-to-head join found nothing and the default network silently got 2 replaceable layers instead of 4. It also prefixes every `named_modules` name with `module.`, which would have made state keys differ between distributed and single-learner runs |
+| `num_learners > 1` | **Now refused** when replacing (this package's `validate`, R-12): each learner picks the unit to replace from its own minibatch, outside the gradient, so the replicas can drift apart. `metrics_only` replaces nothing and is allowed. The row below is the earlier, separate wrapping problem. RLlib wraps each module in `TorchDDPRLModule`, which forwards no attributes, so the trunk-to-head join found nothing and the default network silently got 2 replaceable layers instead of 4. It also prefixes every `named_modules` name with `module.`, which would have made state keys differ between distributed and single-learner runs |
 | Restore | §3.5 |
 
 The three code fixes are small — derive the device from `layer.incoming.weight`, build the
@@ -691,7 +669,7 @@ measured on before they interpret it.
 ### 4.1 Proposal A — plasticity instrumentation only (no training change) — **implemented**
 
 **The one to do first, and it is independent of everything else in this note.** Shipped as
-`cbp_metrics_only: true`, which computes the utility and logs the correlates without replacing
+`metrics_only: true`, which computes the utility and logs the correlates without replacing
 anything.
 
 Add a metrics pass that walks the trainable modules' feed-forward layers each iteration and logs,
@@ -702,7 +680,7 @@ paper's claim for CBP is precisely that it is the only method keeping all three 
 
 | Metric | Definition | Source |
 |---|---|---|
-| `cbp_dead_unit_frac` | Fraction of units whose mean \|activation\| is below `cbp_dead_unit_threshold` | Nature Fig. 2d, ED Fig. 4 |
+| `cbp_dead_unit_frac` | Fraction of units whose mean \|activation\| is below `dead_unit_threshold` | Nature Fig. 2d, ED Fig. 4 |
 | `cbp_mean_weight_magnitude` | Mean \|w\| of incoming weights | Nature ED Fig. 4 |
 | `cbp_batch_effective_rank` | Threshold rank (99% of singular mass, not the papers' entropy-based rank) of the **training minibatch's** activations. Confounded by the policy's own input distribution — §3.8; `train/probe/rank.py` is the comparable version | Nature Methods |
 | `cbp_saturated_unit_frac` | Fraction with mean \|activation\| > 0.9 — the tanh failure | arXiv App. G |
@@ -723,24 +701,22 @@ Two modules, splitting algorithm from wiring the way `encoders/` splits architec
 `moe_learner.py`:
 
 ```
-train/model/cbp.py          # the algorithm. Imports no RLlib, so the formulas
+cda_cbp/cbp.py              # the algorithm. Imports no RLlib, so the formulas
                             # are testable without building an Algorithm.
     find_replaceable_layers()   # incl. the trunk-to-head join (§2.2)
     update_utility()            # the three measures
-    select_and_replace()        # the accumulator and the one-per-step cap
+    select_and_replace()        # the counter (count_rule) and the replacement
     plasticity_metrics()        # the three correlates
 
-train/model/cbp_learner.py  # the RLlib wiring
+cda_cbp/learner.py          # the RLlib wiring
     CBPLearnerMixin             # hooks, apply_gradients, metrics, get/set_state
-    with_continual_backprop()   # composes over any base learner
 
-train/model/optim_learner.py  # independent of CBP
+gym-CDA train/model/optim_learner.py  # independent of CBP
     TunedAdamMixin              # the papers' betas and weight decay, separately
-    with_tuned_adam()           # composes it alone
 ```
 
 - **Where:** `apply_gradients`, once per minibatch, immediately after the optimiser step — the
-  paper's placement (§3.1). `cbp_fire_on: "iteration"` moves it to
+  paper's placement (§3.1). `fire_on: "iteration"` moves it to
   `after_gradient_based_update`.
 - **Scope:** feed-forward hidden units, plus the trunk-to-head layer (§2.2). Attention and
   embeddings excluded (§3.4). Layers no optimiser trains are skipped, which is what keeps it off
@@ -761,14 +737,12 @@ train/model/optim_learner.py  # independent of CBP
   `optimizer: "torch_adam"` (and every checkpoint from before the setting) the timestep is not
   reset and the new unit's effective step ramps up over ~`1/(1-β₁)` updates instead of being full
   size at once. Documented in `_reset_optimizer_slots`.
-- **Composition:** applied over `learner_class_for(...)`'s result, so MoE and JEPA terms survive
-  (§2.5). Off by default, and when off the composition is skipped entirely so the resolved learner
-  class is *identical* to today's — asserted by
-  `test_cbp_wiring.py::test_off_resolves_to_exactly_the_base_learner`, the counterpart of
-  `TestOtherEncodersAreUnaffectedByJEPA`.
+- **Composition:** applied over the encoder's Learner, so MoE and JEPA terms survive (§2.5). Off
+  unless `"cbp"` is in `extensions_enabled`, and when off the composition is skipped entirely so
+  the resolved learner class is *identical* to the base — asserted by
+  `tests/test_wiring.py::test_off_resolves_to_exactly_the_base_learner`.
 
-Two config groups, not one (`config/train_config.json`). The optimiser group is separate on
-purpose: both papers run every algorithm except the standard-PPO baseline with `β₁ = β₂ = 0.99`,
+The optimiser settings are gym-CDA's `optimizer` group, not this package's, on purpose: both papers run every algorithm except the standard-PPO baseline with `β₁ = β₂ = 0.99`,
 and the Nature paper pairs CBP with L2 in *every* RL experiment — so enabling CBP and retuning Adam
 together would measure the two at once, which is the confound the split exists to prevent.
 
@@ -776,8 +750,8 @@ Effort: **M**. Risk: **contained** — the off-by-default path resolves to the s
 
 ### 4.3 Proposal C — CBP during offline pretraining
 
-`train/pretrain/` trains a JEPA encoder on observations alone before any PPO run
-([23](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/23_probe_harness.md), Part 2: pretraining). That loop has **no PPO ratio at all**, so §3.1's constraint vanishes and
+cda-jepa's offline pretrainer trains a JEPA encoder on observations alone before any PPO run
+([its docs/pretraining.md](https://github.com/ChuaCheowHuan/cda_jepa/blob/main/docs/pretraining.md)). That loop has **no PPO ratio at all**, so §3.1's constraint vanishes and
 replacement can run as often as the algorithm wants. It is also the cleanest possible test of the
 mechanism: a supervised-style objective with a well-defined loss, where "did plasticity degrade"
 has an unambiguous answer.
@@ -861,10 +835,10 @@ asked yet.
 | Step | Work | Depends on | Effort |
 |---|---|---|---|
 | 0 | ~~S1-1 (`vf_clip_param` / reward scaling), S1-3 (reward sign)~~ — **done**, see [29](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/29_fixed_issues.md) | — | S–M |
-| 1 | ~~**Proposal A** — plasticity metrics, including the utility statistic computed but unused~~ — **done**, `cbp_metrics_only` | **nothing** | S |
+| 1 | ~~**Proposal A** — plasticity metrics, including the utility statistic computed but unused~~ — **done**, `metrics_only` | **nothing** | S |
 | 2 | ~~**Proposal B** — the mechanism, off by default, composed over `learner_class_for`~~ — **done** | 1 | M |
-| 3 | ~~Checkpoint round-trip and seeding tests for CBP state~~ — **done**, `test_cbp.py` + `integration/test_cbp_wiring.py` | 2 | S |
-| 4 | ~~Run with `cbp_metrics_only: true` and decide whether §3.3 is answered yes~~ — **done at ~2×10⁴ optimiser steps; answer is no** (§3.3, [16](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/16_verification_log.md) §16.16) | 1 | S |
+| 3 | ~~Checkpoint round-trip and seeding tests for CBP state~~ — **done**, `test_cbp.py` + `test_wiring.py` | 2 | S |
+| 4 | ~~Run with `metrics_only: true` and decide whether §3.3 is answered yes~~ — **done at ~2×10⁴ optimiser steps; answer is no** (§3.3, [16](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/16_verification_log.md) §16.16) | 1 | S |
 | 4b | ~~Fix the confounded rank metric~~ — **done**, `train/probe/rank.py` (§3.8) | 4 | S |
 | 5 | **Re-run step 4 at 10⁶–10⁸ steps on real hardware**, multi-seed, reading `train/probe/rank.py` rather than the batch metric | 4b | S code, L compute |
 | 6 | Probe-scored CBP-on/off comparison, multi-seed, with tuned Adam held fixed across arms — **only if step 5 finds something** | 5, [23](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/23_probe_harness.md) | M |
@@ -903,15 +877,15 @@ Related work, for the alternatives §1.2 compares against:
 
 ## Review findings (R-12 to R-14)
 
-R-12 is guarded rather than fixed and is open in [15](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/15_findings_and_recommendations.md); R-13 and
+R-12 is guarded rather than fixed and is open in this package; R-13 and
 R-14 are fixed ([R-13](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/29_fixed_issues.md#from-the-2026-10-07-review)).
 
-- **One learner.** `cbp_enabled` with `num_learners > 1` is refused at config time (R-12, #182).
+- **One learner.** Replacing with `num_learners > 1` is refused at config time (R-12, #182).
   Averaged gradients keep several learners identical; a replacement is a direct overwrite chosen
   per learner, so nothing would pull the copies back together. The proper fix is to synchronise
   the choice (all-reduce the utilities or broadcast learner 0's index) and test it on a real
   two-learner run.
-- **Mean compensation.** `cbp_compensate_mean` (off by default) adds a replaced unit's bias-corrected
+- **Mean compensation.** `compensate_mean` (off by default) adds a replaced unit's bias-corrected
   mean activation times its outgoing weights to the next layer's bias before zeroing them (R-13,
   #183). A saturated tanh unit looks useless to `overall` utility (its activation barely varies) and is
   replaced first, and on a constructed case one replacement moved the outputs by 8-10 standard

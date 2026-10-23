@@ -14,6 +14,20 @@ until it moved here; [docs/migration.md](docs/migration.md) covers what changed.
 - Dohare, Sutton & Mahmood, *Continual Backprop: Stochastic Gradient Descent with Persistent
   Randomness*, arXiv:2108.06325.
 
+## How it fits
+
+```mermaid
+flowchart LR
+    LOP["loss-of-plasticity fork<br/>git submodule, installed unchanged as lop"] -->|"AdamGnT, get_layer_bound"| CBP["cda_cbp<br/>CBPLearnerMixin"]
+    CBP -->|"entry point gym_cda.extensions"| GYM["gym-CDA<br/>composes it when a run lists cbp"]
+    GYM -->|"layout.py, extensions.py,<br/>probe effective_rank"| CBP
+```
+
+The authors' code comes in unchanged from a pinned submodule; gym-CDA reaches this package only
+through its entry point. gym-CDA's
+[docs/30_extensions.md](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/30_extensions.md)
+draws all three extension packages and their forks.
+
 ## Install
 
 gym-CDA is not on PyPI. Install it first, then this package:

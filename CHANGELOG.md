@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Docs brought up to date.** `docs/continual_backprop.md` names the settings as they are now
+  (`metrics_only`, `scope`, ... rather than `cbp_*`), describes how gym-CDA composes the mixin
+  through its extension point, and lists this repository's files; its banner is one paragraph.
+  `docs/settings.md` drops the rule about gym-CDA's own CBP (no supported gym-CDA has it) and the
+  notes that repeated the rules, and names the settings in the rest. `docs/metrics.md` links the
+  cadence caveat here rather than to a gym-CDA section that no longer exists. The README draws how
+  `lop`, this package and gym-CDA fit.
+
 - **The `jepa` tests use whichever package provides `jepa`.** gym-CDA's own `jepa` (2.2 and
   earlier) or cda-jepa's, which the test extra now installs. The JEPA Learner is looked up
   through gym-CDA's registry instead of imported from `gym_continuousDoubleAuction.train.model.jepa_learner`,
