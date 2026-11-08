@@ -289,9 +289,9 @@ falsifiable prediction this repo can already test.
 
 ### 2.5 The seam exists — but it is the Learner, **not** the encoder registry
 
-Every prior extension to the learning stack went through `train/model/encoders/`. MoE and JEPA both
+Every prior extension to the learning stack went through gym-CDA's `train/model/encoders/`. MoE and JEPA both
 did, and the registry is genuinely good: `@register(name, defaults, module_class_path,
-learner_class_path)` plus a spec block in `train_config.json` is a complete extension point for an
+learner_class_path)` plus a spec block in gym-CDA's `train_config.json` is a complete extension point for an
 architecture.
 
 **Continual Backprop must not go through it, for three independent reasons.**
@@ -596,7 +596,7 @@ Take the Nature paper's own PPO values — `ρ = 1e-4`, `m = 1e4`, 256 units —
   replacements per default run.
 
 Hence `maturity_threshold: 100` — the arXiv CBP default, not the Nature PPO one — and hence the
-cadence note in `train_config.json`.
+cadence note in [settings.md](settings.md) (Cadence).
 
 **This is also the reason `cbp_replacements` is a required metric rather than a nice one.** A
 continual backprop that never fires produces exactly the same logs, the same losses and the same
@@ -625,8 +625,8 @@ a changed config. That is the whole envelope the bugs lived outside of.
 The three code fixes are small — derive the device from `layer.incoming.weight`, build the
 generator on the learner's device, call `unwrapped()` before discovery. What is worth keeping is
 the shape of the mistake: the mechanism was tested thoroughly against the specification it was
-written from, and not at all against the configurations it would actually run in. `docs/19` and
-`docs/09` describe those configurations; neither was consulted while writing the tests.
+written from, and not at all against the configurations it would actually run in. gym-CDA's
+`docs/19` and `docs/09` describe those configurations; neither was consulted while writing the tests.
 
 The device and DDP fixes are covered by tests that assert the *property* rather than executing it,
 since a CPU-only box cannot do the latter — a `meta`-device tensor stands in for CUDA, and a stub
@@ -726,7 +726,7 @@ gym-CDA train/model/optim_learner.py  # independent of CBP
 - **Activations:** forward hooks on each layer's activation module, reducing to per-unit statistics
   *inside the hook*. Necessary rather than tidy: `mean|h - f̂|` needs the running mean as it stood
   at the forward pass and cannot be recovered afterwards — and keeping `h` would pin the autograd
-  graph until the next forward, which is the leak `jepa_learner.setup()` documents.
+  graph until the next forward, which is the leak cda-jepa's JEPA learner documents.
 - **State:** utility, mean activation, age and accumulator held on the **Learner**, so champion
   snapshots and inference-only copies never see them (§3.4), and routed through `get_state` /
   `set_state` so a resume is correct (§3.5).
@@ -877,7 +877,8 @@ Related work, for the alternatives §1.2 compares against:
 
 ## Review findings (R-12 to R-14)
 
-R-12 is guarded rather than fixed and is open in this package; R-13 and
+R-12 is guarded rather than fixed and is open in this package
+([#31](https://github.com/ChuaCheowHuan/cda_cbp/issues/31)); R-13 and
 R-14 are fixed ([R-13](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/29_fixed_issues.md#from-the-2026-10-07-review)).
 
 - **One learner.** Replacing with `num_learners > 1` is refused at config time (R-12, #182).

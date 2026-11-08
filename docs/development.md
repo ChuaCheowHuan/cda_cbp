@@ -10,6 +10,8 @@ cda_cbp/learner.py    CBPLearnerMixin: hooks, apply_gradients, metrics, get/set_
 tests/                pytest; `python -m pytest -q`
 third_party/loss-of-plasticity  the authors' code, a git submodule, installed unchanged as `lop`
 .github/workflows/cda_cbp.yml  CI
+.claude/skills/                 agent skills (below)
+CLAUDE.md                       rules for agents working here
 ```
 
 ## Install for development
@@ -21,8 +23,9 @@ pip install torch==2.13.0 --extra-index-url https://download.pytorch.org/whl/cpu
 pip install "gym_continuousDoubleAuction @ git+https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction"
 git clone --recurse-submodules https://github.com/ChuaCheowHuan/cda_cbp
 cd cda_cbp
-pip install -e ".[test]"
-python -m pytest -q
+pip install -e ".[test]" ruff pyflakes
+python -m pytest -q        # about 20 s on CPU
+ruff format --check . && python -m pyflakes cda_cbp tests
 ```
 
 A clone made without `--recurse-submodules` needs `git submodule update --init` before the
@@ -51,13 +54,17 @@ third_party/loss-of-plasticity checkout <sha>`, commit the submodule, and let CI
 | `test_cbp_recurrent.py` | CBP on an LSTM core under `scope: "recurrent"` |
 | `test_wiring.py` | A real gym-CDA `Algorithm`: composition over the encoder's Learner and outermost, real updates, metrics-only, checkpoint state, a real save and restore, and the resume guards |
 | `test_lop_reference.py` | Step by step against the authors' `lop.algos.gnt.GnT` on the same network, data and `AdamGnT`: the same units replaced, ages, utility ranking, network and Adam state (timestep included) |
-| `test_extension.py` | The package as gym-CDA sees it: discovery, defaults, validation, legacy settings |
+| `test_extension.py` | The package as gym-CDA sees it: discovery, defaults (and the two legacy ones), validation through `TrainConfig`, legacy settings |
 | `test_lop.py` | The `lop` modules used import, are the pinned submodule's files unchanged, and `lop.envs` is not installed |
-| `test_count_rule.py` | The `arxiv` counter grows by `n_l · ρ` and `lop`'s by the eligible count, both replace every whole unit it holds, `nature` at most one, a missing `count_rule` means `nature`, and the init bound is `lop`'s `get_layer_bound` |
+| `test_count_rule.py` | The `arxiv` counter grows by `n_l · ρ` and `lop`'s by the eligible count, both replace every whole unit it holds, a missing `count_rule` means `nature` (whose one-per-step cap is in `test_cbp.py`), and the init bound is `lop`'s `get_layer_bound` |
 | `test_extra_heads.py` | Heads another extension declares in `extra_trunk_heads` are consumers of the trunk's last layer, on MLP and LSTM trunks, and a replacement zeroes the unit in each |
 | `test_adam_gnt.py` | `AdamGnT`'s per-weight timestep is reset with the moments for exactly the replaced slices, torch Adam is left alone, a missing `optimizer` means `torch_adam`, and a real `Algorithm` builds the optimiser asked for |
-| `test_moved_checks.py` | Checks that lived in gym-CDA's suite until CBP moved: the rank metric calls gym-CDA's `effective_rank` (NaN below two rows) and keeps no copy, and a replaced unit's bias is zeroed |
+| `test_moved_checks.py` | A check that lived in gym-CDA's suite until CBP moved: the rank metric is gym-CDA's `effective_rank`, with NaN below two rows |
 | `test_docs.py` | The settings table matches `DEFAULTS`, and every relative link resolves |
+
+The tests that build an `Algorithm` share one Ray session (`ray_session` in `tests/conftest.py`),
+and the classes that only read a replacing run share one (`firing_run` in `test_wiring.py`). A new
+one should do the same rather than start its own Ray or build an identical `Algorithm`.
 
 The `jepa` cases need a `jepa` encoder: gym-CDA's own (2.2 and earlier) or cda-jepa's, which
 `.[test]` installs. Without one they skip (`requires_jepa` in `tests/conftest.py`).
@@ -77,3 +84,14 @@ This package relies on gym-CDA for:
   still load.
 
 The gym-CDA ref CI tests against is `GYM_CDA_REF` in `.github/workflows/cda_cbp.yml`.
+
+## Agent skills
+
+`.claude/skills/` holds two, for Claude Code or any agent that reads them:
+
+| Skill | Use it to |
+|---|---|
+| `cbp-verify-finding` | Reproduce a claimed bug before filing or fixing it; `scripts/hook_rows.py` prints the rows each layer's statistics average over next to `loss_mask` |
+| `cbp-doc-sync` | After a change, list stale gym-CDA-era references and test-inventory drift (`scripts/check_docs.py`) and fix them |
+
+Issues carry a severity, a kind, and `agent` or `human` (see `CLAUDE.md`).

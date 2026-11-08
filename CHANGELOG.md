@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Review and tidy-up (2026-11-08).** Five new findings filed (#27-#31); the open review issues
+  labelled `agent` or `human`, with #13, #15, #16 and #18 split into sub-issues (#19-#26).
+- **Stale names fixed (#17).** The no-replaceable-layer warning names
+  `extension_settings["cbp"]["scope"]` instead of gym-CDA's old `cbp_scope`; docstrings and
+  `docs/continual_backprop.md` point at this repository's docs or name gym-CDA's;
+  `docs/settings.md` says `replacement_rate` and `maturity_threshold` count iterations under
+  `fire_on: "iteration"`.
+- **Tests: 203 to 172, about twice as fast.** Duplicates, constant and source-text checks, and a
+  test that skipped on every supported gym-CDA were removed; the tests that build an `Algorithm`
+  share one Ray session, and the checkpoint tests read the same firing run as the update tests
+  instead of training an identical one. docs/development.md lists the files.
+- **Agent skills and CLAUDE.md.** `cbp-verify-finding` (with `hook_rows.py`, which prints what the
+  hooks counted beside `loss_mask`) and `cbp-doc-sync` (with `check_docs.py`).
+
 - **Docs brought up to date.** `docs/continual_backprop.md` names the settings as they are now
   (`metrics_only`, `scope`, ... rather than `cbp_*`), describes how gym-CDA composes the mixin
   through its extension point, and lists this repository's files; its banner is one paragraph.
