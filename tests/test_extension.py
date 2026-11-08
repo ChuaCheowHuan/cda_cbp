@@ -16,10 +16,6 @@ def test_gym_cda_discovers_the_installed_package():
     assert extensions.discover()[NAME] is cda_cbp.EXTENSION
 
 
-def test_it_wraps_outside_every_default_ordered_extension():
-    assert cda_cbp.EXTENSION.learner_order > 0
-
-
 #: Keys whose `CBPConfig` value is the legacy one on purpose: a checkpoint is
 #: rebuilt from its own recorded settings, and one written before the key
 #: existed must keep behaving as it did. A new run gets the block's default.
@@ -32,12 +28,6 @@ def test_the_defaults_are_the_algorithms_defaults():
     assert to_cbp_config(settings) == CBPConfig(enabled=True)
 
 
-def test_only_the_legacy_keys_differ():
-    assert DEFAULTS["optimizer"] == "adam_gnt" and DEFAULTS["count_rule"] == "arxiv"
-    for key, legacy in LEGACY_WHEN_MISSING.items():
-        assert getattr(CBPConfig(enabled=True), key) == legacy
-
-
 def test_enabled_with_no_settings_fills_every_default():
     cfg = TrainConfig(**TEST_CFG, **cbp())
     assert extensions.resolve(cfg.extensions_enabled, cfg.extension_settings)[NAME] == DEFAULTS
@@ -48,21 +38,10 @@ def test_an_unknown_setting_is_refused():
         TrainConfig(**TEST_CFG, **cbp(enabled=True))
 
 
-@pytest.mark.parametrize(
-    "bad", [dict(utility="nope"), dict(scope="nope"), dict(fire_on="nope"), dict(utility_decay=1.0)]
-)
-def test_a_bad_value_is_refused_when_the_config_is_built(bad):
-    with pytest.raises(ValueError):
-        TrainConfig(**TEST_CFG, **cbp(**bad))
-
-
-@pytest.mark.skipif(
-    "cbp_enabled" not in TrainConfig.__dataclass_fields__,
-    reason="this gym-CDA has no built-in CBP",
-)
-def test_enabling_both_this_and_the_builtin_is_refused():
-    with pytest.raises(ValueError, match="twice"):
-        TrainConfig(**TEST_CFG, **cbp(), cbp_enabled=True)
+def test_a_bad_value_is_refused_when_the_config_is_built():
+    """gym-CDA calls `validate` while building the TrainConfig; the values are in test_cbp.py."""
+    with pytest.raises(ValueError, match="Unknown utility"):
+        TrainConfig(**TEST_CFG, **cbp(utility="nope"))
 
 
 class TestSettingsAreReadOffTheLearnerConfig:

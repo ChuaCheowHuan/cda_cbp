@@ -1,6 +1,7 @@
 """Shared helpers: the env's spaces, a built trainable module, and CBP enabled as an extension."""
 
 import pytest
+import ray
 
 from gym_continuousDoubleAuction.envs.continuousDoubleAuction_env import (
     continuousDoubleAuctionEnv,
@@ -104,3 +105,15 @@ def build_module(spaces, encoder_type=MLP_ENCODER_TYPE, **kwargs):
     if spec.module_class is None:
         spec.module_class = CDAPPOTorchRLModule
     return spec.build()
+
+
+@pytest.fixture(scope="session")
+def ray_session():
+    """One local Ray for every test that builds an `Algorithm`.
+
+    Started once rather than per class: `ray.shutdown` and the next `ray.init`
+    cost more than most of the tests they bracket.
+    """
+    ray.init(ignore_reinit_error=True, include_dashboard=False, log_to_driver=False, num_cpus=2)
+    yield
+    ray.shutdown()

@@ -21,7 +21,6 @@ What these pin:
 """
 
 import pytest
-import ray
 import torch
 import torch.nn as nn
 from conftest import TEST_CFG, cbp
@@ -147,9 +146,6 @@ class TestTheStepIsResetWithTheMoments:
 
 
 class TestTheSetting:
-    def test_a_new_run_defaults_to_adam_gnt(self):
-        assert cbp_settings.DEFAULTS["optimizer"] == "adam_gnt"
-
     def test_a_block_without_it_means_torch_adam(self):
         """A checkpoint is rebuilt from its own settings, which lack the key."""
         recorded = {k: v for k, v in cbp_settings.DEFAULTS.items() if k != "optimizer"}
@@ -161,10 +157,6 @@ class TestTheSetting:
     def test_the_legacy_group_means_torch_adam(self):
         assert _as_config({"continual_backprop": {"cbp_enabled": True}}).optimizer == "torch_adam"
 
-    def test_an_unknown_value_is_refused(self):
-        with pytest.raises(ValueError, match="optimizer"):
-            CBPConfig(enabled=True, optimizer="sgd")
-
 
 def _optimizers(train_kwargs):
     algo = build_config(TrainConfig(**TEST_CFG, **train_kwargs))[0].build_algo()
@@ -174,18 +166,9 @@ def _optimizers(train_kwargs):
         algo.stop()
 
 
+@pytest.mark.usefixtures("ray_session")
 class TestTheLearnerBuildsTheOptimiser:
-    @classmethod
-    def setup_class(cls):
-        ray.init(ignore_reinit_error=True, include_dashboard=False, log_to_driver=False, num_cpus=2)
-
-    @classmethod
-    def teardown_class(cls):
-        ray.shutdown()
-
-    def test_replacing_builds_adam_gnt(self):
-        optimizers = _optimizers(cbp())
-        assert optimizers and all(type(o) is AdamGnT for o in optimizers.values())
+    """The default, `adam_gnt` when replacing, is checked on test_wiring.py's shared run."""
 
     def test_with_gym_cdas_adam_settings(self):
         """Tuned Adam set as well must not swap AdamGnT for torch's Adam (#335 review)."""

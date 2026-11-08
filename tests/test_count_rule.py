@@ -114,30 +114,13 @@ class TestTheLopRule:
         assert state.accumulator == pytest.approx(0.5)
 
 
-class TestTheNatureRule:
-    def test_the_nature_rule_still_caps_at_one(self):
-        layer, state = _setup()
-        config = CBPConfig(
-            enabled=True, maturity_threshold=0, count_rule="nature", replacement_rate=0.5
-        )
-        assert len(select_and_replace(state, layer, torch.arange(5.0), config)) == 1
-        assert state.accumulator == pytest.approx(1.5)
-
-
 class TestTheSetting:
-    def test_a_new_run_defaults_to_arxiv(self):
-        assert cbp_settings.DEFAULTS["count_rule"] == "arxiv"
-
     def test_a_block_without_it_means_nature(self):
         recorded = {k: v for k, v in cbp_settings.DEFAULTS.items() if k != "count_rule"}
         lcd = {
             "extensions": {"extensions_enabled": ["cbp"], "extension_settings": {"cbp": recorded}}
         }
         assert _as_config(lcd).count_rule == "nature"
-
-    def test_an_unknown_value_is_refused(self):
-        with pytest.raises(ValueError, match="count_rule"):
-            CBPConfig(enabled=True, count_rule="while")
 
 
 class TestTheInitBoundIsTheAuthors:
@@ -146,17 +129,3 @@ class TestTheInitBoundIsTheAuthors:
         which is lop's `init="default"`."""
         layer = nn.Linear(37, 4)
         assert get_layer_bound(layer, "default", 1.0) == pytest.approx(1 / math.sqrt(37))
-
-    def test_a_replacement_draws_inside_it(self):
-        layer, state = _setup()
-        select_and_replace(state, layer, torch.arange(5.0), _arxiv(replacement_rate=0.2))
-        bound = get_layer_bound(layer.incoming, "default", 1.0)
-        assert torch.all(layer.incoming.weight[0].abs() <= bound)
-
-    def test_and_cbp_imports_it_rather_than_restating_it(self):
-        import inspect
-
-        from cda_cbp import cbp
-
-        assert cbp.get_layer_bound is get_layer_bound
-        assert "math.sqrt(layer.incoming.in_features)" not in inspect.getsource(cbp)

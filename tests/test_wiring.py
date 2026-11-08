@@ -19,7 +19,6 @@ import shutil
 import tempfile
 
 import pytest
-import ray
 import torch
 from conftest import TEST_CFG, cbp, jepa_learner, requires_jepa, with_jepa
 
@@ -31,6 +30,8 @@ from gym_continuousDoubleAuction.train.train import (
     _learner_config_dict,
     build_config,
 )
+
+from lop.utils.AdamGnT import AdamGnT
 
 from cda_cbp.learner import CBP_STATE, CBPLearnerMixin
 
@@ -103,25 +104,34 @@ class TestTunedAdamComposesWithCBP:
         assert values["optimizer"]["adam_betas"] == [0.9, 0.999]
 
 
+@pytest.fixture(scope="module")
+def firing_run(ray_session):
+    """One real training iteration with the mechanism firing, shared by the classes that read it.
+
+    Read-only for `TestCBPRunsInsideARealUpdate`; `TestCBPStateSurvivesACheckpoint` writes the
+    CBP state back exactly as it read it.
+    """
+    algo = build_config(TrainConfig(**TEST_CFG, **FIRING_CFG))[0].build_algo()
+    result = algo.train()
+    yield algo, result
+    algo.stop()
+
+
 class TestCBPRunsInsideARealUpdate:
     """One real training iteration, with the mechanism firing."""
 
-    @classmethod
-    def setup_class(cls):
-        ray.init(ignore_reinit_error=True, include_dashboard=False, log_to_driver=False, num_cpus=2)
-        cls.cfg = TrainConfig(**TEST_CFG, **FIRING_CFG)
-        ppo_config, _cb = build_config(cls.cfg)
-        cls.algo = ppo_config.build_algo()
-        cls.result = cls.algo.train()
-        cls.learner = cls.algo.learner_group._learner
-
-    @classmethod
-    def teardown_class(cls):
-        cls.algo.stop()
-        ray.shutdown()
+    @pytest.fixture(autouse=True)
+    def _run(self, firing_run):
+        self.algo, self.result = firing_run
+        self.learner = self.algo.learner_group._learner
 
     def test_the_learner_is_the_composed_class(self):
         assert isinstance(self.learner, CBPLearnerMixin)
+
+    def test_replacing_trains_with_adam_gnt(self):
+        """The default `optimizer` when units are replaced (arXiv Algorithm 2)."""
+        optimizers = self.learner._named_optimizers
+        assert optimizers and all(type(o) is AdamGnT for o in optimizers.values())
 
     def test_every_trainable_module_got_four_layers(self):
         """Two hidden layers each for the policy and the value network.
@@ -198,6 +208,7 @@ class TestCBPRunsInsideARealUpdate:
             assert not any(value.requires_grad for value in stats.values())
 
 
+@pytest.mark.usefixtures("ray_session")
 class TestCBPOnTheLSTMCore:
     """docs/29 S3-32: under scope `recurrent` the lstm encoder is no longer a no-op.
 
@@ -208,7 +219,6 @@ class TestCBPOnTheLSTMCore:
 
     @classmethod
     def setup_class(cls):
-        ray.init(ignore_reinit_error=True, include_dashboard=False, log_to_driver=False, num_cpus=2)
         cls.cfg = TrainConfig(**TEST_CFG, **cbp(**FIRING, scope="recurrent"), encoder_type="lstm")
         ppo_config, _cb = build_config(cls.cfg)
         cls.algo = ppo_config.build_algo()
@@ -218,7 +228,6 @@ class TestCBPOnTheLSTMCore:
     @classmethod
     def teardown_class(cls):
         cls.algo.stop()
-        ray.shutdown()
 
     def test_each_trainable_module_has_an_actor_and_a_critic_lstm(self):
         assert set(self.learner._cbp_layers) == {"policy_0", "policy_1"}
@@ -271,12 +280,12 @@ class TestCBPOnTheLSTMCore:
             torch.testing.assert_close(self.learner._cbp_state[module_id][name].age, age)
 
 
+@pytest.mark.usefixtures("ray_session")
 class TestMetricsOnlyChangesNothing:
-    """docs/25 Proposal A: measure without touching the trajectory."""
+    """Proposal A (docs/continual_backprop.md §4.1): measure without touching the trajectory."""
 
     @classmethod
     def setup_class(cls):
-        ray.init(ignore_reinit_error=True, include_dashboard=False, log_to_driver=False, num_cpus=2)
         cfg = TrainConfig(
             **TEST_CFG,
             **cbp(
@@ -294,7 +303,6 @@ class TestMetricsOnlyChangesNothing:
     @classmethod
     def teardown_class(cls):
         cls.algo.stop()
-        ray.shutdown()
 
     def test_nothing_was_replaced_despite_an_absurd_rate(self):
         total = sum(
@@ -325,21 +333,9 @@ class TestCBPStateSurvivesACheckpoint:
     project whose `chkpt_freq` is 2, frequent.
     """
 
-    @classmethod
-    def setup_class(cls):
-        ray.init(ignore_reinit_error=True, include_dashboard=False, log_to_driver=False, num_cpus=2)
-        cls.tmp = tempfile.mkdtemp()
-        cfg = TrainConfig(**TEST_CFG, **FIRING_CFG)
-        ppo_config, _cb = build_config(cfg)
-        cls.algo = ppo_config.build_algo()
-        cls.algo.train()
-        cls.learner = cls.algo.learner_group._learner
-
-    @classmethod
-    def teardown_class(cls):
-        cls.algo.stop()
-        ray.shutdown()
-        shutil.rmtree(cls.tmp, ignore_errors=True)
+    @pytest.fixture(autouse=True)
+    def _run(self, firing_run):
+        self.learner = firing_run[0].learner_group._learner
 
     def test_get_state_carries_the_cbp_block(self):
         state = self.learner.get_state()
@@ -395,6 +391,7 @@ class TestCBPStateSurvivesACheckpoint:
         assert dropped in self.learner._cbp_state[module_id]
 
 
+@pytest.mark.usefixtures("ray_session")
 class TestCBPSurvivesARealSaveAndRestore:
     """A real `save_to_path` and `build_algo(is_restore=True)`.
 
@@ -411,7 +408,6 @@ class TestCBPSurvivesARealSaveAndRestore:
 
         from gym_continuousDoubleAuction.train.train import build_algo, save_checkpoint
 
-        ray.init(ignore_reinit_error=True, include_dashboard=False, log_to_driver=False, num_cpus=2)
         cls.tmpdir = tempfile.mkdtemp(prefix="cda_cbp_ckpt_")
         cls.cfg = TrainConfig(log_base_dir=cls.tmpdir, chkpt_keep=0, **TEST_CFG, **FIRING_CFG)
 
@@ -445,7 +441,6 @@ class TestCBPSurvivesARealSaveAndRestore:
     @classmethod
     def teardown_class(cls):
         cls.restored.stop()
-        ray.shutdown()
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
     def test_the_restored_learner_still_has_cbp(self):
