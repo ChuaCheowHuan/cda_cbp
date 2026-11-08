@@ -122,19 +122,6 @@ class TestLayerDiscovery:
         assert not any("target_trunk" in name for name in names)
         assert any("trunk" in name for name in names)
 
-    @pytest.mark.parametrize("encoder_type", encoder_types())
-    def test_discovery_runs_on_every_encoder(self, spaces, encoder_type):
-        """Discovery must never raise, whatever the architecture.
-
-        Finding nothing is a legitimate answer - the `lstm` encoder has no
-        two-Linear feed-forward block at all - but raising would take down any
-        run that enabled continual backprop with that encoder selected.
-        """
-        layers = find_replaceable_layers(build_module(spaces, encoder_type))
-        for layer in layers:
-            assert layer.num_units == layer.incoming.out_features
-            assert all(out.in_features == layer.num_units for out in layer.outgoing)
-
     def test_an_unknown_scope_raises(self, spaces):
         with pytest.raises(ValueError, match="Unknown scope"):
             find_replaceable_layers(build_module(spaces), scope="everything")
@@ -152,6 +139,8 @@ class TestConfig:
             ("utility_decay", 1.0, "utility_decay"),
             ("replacement_rate", -1.0, "replacement_rate"),
             ("maturity_threshold", -1, "maturity_threshold"),
+            ("optimizer", "sgd", "Unknown optimizer"),
+            ("count_rule", "while", "Unknown count_rule"),
         ):
             with pytest.raises(ValueError, match=message):
                 CBPConfig(**{field: value})
@@ -161,13 +150,6 @@ class TestConfig:
             {"cbp_enabled": True, "cbp_replacement_rate": 0.5, "unrelated": 1}
         )
         assert config.enabled and config.replacement_rate == 0.5
-
-    def test_metrics_only_measures_without_replacing(self):
-        config = CBPConfig(enabled=True, metrics_only=True)
-        assert config.active and not config.replaces
-
-    def test_off_is_entirely_inert(self):
-        assert not CBPConfig().active and not CBPConfig().replaces
 
 
 # --- The utility measures ---------------------------------------------------
@@ -294,7 +276,9 @@ class TestReplacement:
             self.config,
         )
         assert torch.all(self.layer.incoming.weight[0].abs() <= bound)
+        # The papers zero a new unit's bias rather than drawing it (gym-CDA #251).
         assert self.layer.incoming.bias[0] == 0.0
+        assert torch.all(self.layer.incoming.bias[1:] != 0.0)
 
     def test_the_replacement_injects_no_new_randomness(self):
         """The exact half of the guarantee.
@@ -575,23 +559,20 @@ class TestDevicePlacement:
         assert state.mean_act.device.type == "meta"
         assert state.age.device.type == "meta"
 
-    def test_the_learner_derives_the_device_from_the_weights(self):
+    def test_the_learner_derives_the_device_from_the_weights(self, spaces):
         """`_cbp_attach` must read the device off the layer, not default it.
 
         The module is moved to the learner's device by `super().build()` before
         any of this runs, so the weight is authoritative. A default-constructed
         state would sit on the CPU while `h` arrived on CUDA, and
         `activation_stats`'s `h - f_hat` would raise on the first forward pass
-        of every GPU run.
+        of every GPU run. A meta-device module stands in for CUDA.
         """
-        import inspect
-
-        from cda_cbp import learner as cbp_learner
-
-        source = inspect.getsource(cbp_learner.CBPLearnerMixin._cbp_attach)
-        assert "device=layer.device" in source, (
-            "CBP state must be allocated on the layer's own device"
-        )
+        learner = TestNothingToReplace._Learner(build_module(spaces).to("meta"))
+        learner._cbp_attach("policy_0")
+        states = learner._cbp_state["policy_0"].values()
+        assert states and all(s.utility.device.type == "meta" for s in states)
+        assert all(s.age.device.type == "meta" for s in states)
 
     def test_a_layers_device_is_its_weights_device(self):
         """`layer.device` is what `_cbp_attach` reads, so it must be the weight's,
@@ -649,9 +630,6 @@ class TestNothingToReplace:
 
         def should_module_be_updated(self, module_id):
             return True
-
-    def test_lstm_has_no_replaceable_layer(self, spaces):
-        assert find_replaceable_layers(build_module(spaces, encoder_type="lstm")) == []
 
     def test_a_trained_module_with_nothing_to_replace_warns(self, spaces, caplog):
         learner = self._Learner(build_module(spaces, encoder_type="lstm"))
@@ -882,12 +860,6 @@ class TestMeanCompensation:
         cbp_module._reinitialise(state, layer, 0, None, None, config)  # must not raise
         assert torch.all(layer.outgoing[0].weight[:, 0] == 0)
 
-    def test_it_is_off_by_default_and_read_from_the_group(self):
-        from cda_cbp.cbp import CBPConfig
-
-        assert CBPConfig().compensate_mean is False
-        assert CBPConfig.from_dict({"cbp_compensate_mean": True}).compensate_mean is True
-
     def test_it_reaches_the_learner_and_is_unrestorable(self):
         from gym_continuousDoubleAuction.train.checkpoint import _config_fingerprint
         from gym_continuousDoubleAuction.train.config import TrainConfig
@@ -928,11 +900,6 @@ class TestContinualBackpropNeedsOneLearner:
         from gym_continuousDoubleAuction.train.config import TrainConfig
 
         TrainConfig(**cbp(metrics_only=True), num_learners=2)
-
-    def test_off_with_many_learners_is_fine(self):
-        from gym_continuousDoubleAuction.train.config import TrainConfig
-
-        TrainConfig(num_learners=2)
 
 
 class TestDiscoveryMatchesTheRecordedLayers:

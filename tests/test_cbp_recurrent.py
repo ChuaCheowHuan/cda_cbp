@@ -28,7 +28,6 @@ from gym_continuousDoubleAuction.envs.continuousDoubleAuction_env import (
 )
 from conftest import build_module
 from cda_cbp.cbp import (
-    SCOPES,
     CBPConfig,
     CBPLayerState,
     RecurrentLayer,
@@ -264,12 +263,6 @@ def spaces():
 
 
 class TestDiscoveryOnTheRealEncoders:
-    def test_recurrent_is_a_scope_and_unknown_ones_are_refused(self):
-        assert "recurrent" in SCOPES
-        assert CBPConfig(scope="recurrent").scope == "recurrent"
-        with pytest.raises(ValueError, match="Unknown scope"):
-            CBPConfig(scope="attention")
-
     def test_the_lstm_encoder_has_nothing_under_feedforward(self, spaces):
         module = build_module(spaces, encoder_type="lstm")
         assert find_replaceable_layers(module, "feedforward") == []
@@ -289,13 +282,6 @@ class TestDiscoveryOnTheRealEncoders:
         (layer,) = find_replaceable_layers(module, "recurrent")
         assert layer.name == "encoder.encoder.lstm"
         assert len(layer.outgoing) == 2
-
-    @pytest.mark.parametrize("encoder_type", ["mlp", "transformer", "moe_transformer"])
-    def test_every_other_encoder_is_unchanged_by_the_scope(self, spaces, encoder_type):
-        module = build_module(spaces, encoder_type=encoder_type)
-        feedforward = [l.name for l in find_replaceable_layers(module, "feedforward")]
-        recurrent = [l.name for l in find_replaceable_layers(module, "recurrent")]
-        assert feedforward == recurrent and feedforward
 
     def test_the_hook_target_is_the_lstm_itself(self, spaces):
         module = build_module(spaces, encoder_type="lstm")

@@ -150,7 +150,7 @@ class CBPLearnerMixin:
 
         # A dedicated stream, so a replacement drawing random numbers does not
         # shift the global one and make an otherwise seeded run diverge. Same
-        # discipline as the `torch.random.fork_rng` fix in changelog 38.2.
+        # discipline as gym-CDA's `torch.random.fork_rng` fix (its docs/17, 38.2).
         #
         # On the learner's own device, not the default one. `_reinitialise`
         # fills `torch.empty_like(weight[index])`, which lives wherever the
@@ -211,12 +211,12 @@ class CBPLearnerMixin:
             # Not silent: a run that asked for continual backprop on a network
             # it cannot touch would otherwise train exactly like one without it,
             # with no replacements and no metrics to show the difference. The
-            # `lstm` encoder is the case under scope "feedforward" (docs/25
-            # section 3.4); "recurrent" covers its core.
+            # `lstm` encoder is the case under scope "feedforward" (docs/continual_backprop.md
+            # §3.4); "recurrent" covers its core.
             logger.warning(
                 "continual backprop is on, but %s has no layer it can replace "
                 "(scope %r); it will train as if continual backprop were off. "
-                "An lstm encoder needs cbp_scope \"recurrent\".",
+                "An lstm encoder needs extension_settings[\"cbp\"][\"scope\"] = \"recurrent\".",
                 module_id,
                 self._cbp_config.scope,
             )
@@ -249,7 +249,7 @@ class CBPLearnerMixin:
         Nothing holding the autograd graph may be stored: `activation_stats`
         detaches, and the rank sample is detached and cloned. Keeping a live
         `h` would pin the graph until the next forward, which is the leak
-        `jepa_learner.setup()` documents for its own training-only submodules.
+        cda-jepa's JEPA learner documents for its own training-only submodules.
         """
         key = (module_id, layer.name)
 
@@ -357,7 +357,7 @@ class CBPLearnerMixin:
                 `batch_effective_rank`, `mature_unit_frac` - where an average
                 is what a reader comparing runs would take anyway.
 
-        docs/11 lists the same table from the reader's side; the two have to
+        docs/metrics.md lists the same table from the reader's side; the two have to
         agree, because that table is what someone plots against.
         """
         summed = {"replacements"}

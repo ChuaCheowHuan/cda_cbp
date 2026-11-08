@@ -5,8 +5,8 @@ What this implements
 Continual Backprop (CBP) is backprop plus a *generate-and-test* process that
 continually reinitialises low-utility hidden units. It is not an architecture
 and not a loss term - it is a modification to the update rule, applied after
-the optimiser step. See `docs/25_continual_backprop.md` for why it belongs on
-the Learner rather than in the encoder registry.
+the optimiser step. See `docs/continual_backprop.md` §2.5 for why it belongs on
+the Learner rather than in gym-CDA's encoder registry.
 
 Two papers define it and they do not agree in every detail. Where they differ,
 the choice is a config knob rather than a decision taken here:
@@ -28,18 +28,19 @@ Why this module imports no RLlib
 Everything here is plain torch, so the formulas can be tested against
 hand-computed values without building an `Algorithm`. The RLlib wiring - where
 the hooks are registered, when the step fires, how the state is checkpointed -
-lives in `cbp_learner.py`. That split mirrors `encoders/` (architecture) versus
-`moe_learner.py` (wiring).
+lives in `learner.py`. That split mirrors gym-CDA's `encoders/` (architecture)
+versus `moe_learner.py` (wiring).
 
 The unit of time is one optimiser step
 --------------------------------------
 `replacement_rate` and `maturity_threshold` are both counted in **optimiser
-steps**, not environment steps or training iterations. This matters more here
+steps**, not environment steps or training iterations (under `fire_on:
+"iteration"` the step fires once per iteration, so they count iterations). This matters more here
 than in the papers: at this repo's defaults a training iteration performs 4
 Adam steps (4 epochs over one full batch, `minibatch_size: null`) against the
 320 of the papers' Continual PPO, so a maturity threshold transplanted from
-the paper would never be reached. See `docs/25` and the `_note_cadence` in
-`config/train_config.json`.
+the paper would never be reached. See `docs/settings.md` (Cadence) and
+`docs/continual_backprop.md` §3.6.
 """
 
 from __future__ import annotations
@@ -81,7 +82,7 @@ UTILITY_MEASURES = ("contribution", "mean_corrected", "overall")
 #:                 weight matrix, and zeroing the outgoing weights is the whole
 #:                 reason a replacement does not disturb the function.
 #: `recurrent`   - everything in `feedforward`, plus the hidden units of the top
-#:                 layer of an `nn.LSTM` core (docs/29 S3-32, docs/25 section 3.4).
+#:                 layer of an `nn.LSTM` core (gym-CDA docs/29 S3-32, docs/continual_backprop.md §3.4).
 #:                 The `lstm` encoder has nothing replaceable under
 #:                 `feedforward`, which is why this exists. See `RecurrentLayer`
 #:                 for what a unit is and what is zeroed.
@@ -158,13 +159,15 @@ _ACTIVATIONS = (nn.ReLU, nn.GELU, nn.Tanh, nn.ELU, nn.SiLU, nn.Sigmoid, nn.Leaky
 class CBPConfig:
     """One run's Continual Backprop settings.
 
-    Built from the `continual_backprop` group of `config/train_config.json` and
-    carried to the Learner through RLlib's `learner_config_dict`.
+    Built from the `cbp` extension's settings (`config.to_cbp_config`, every key
+    in `docs/settings.md`), or from a legacy checkpoint's `continual_backprop`
+    group (`from_dict`), and carried to the Learner through RLlib's
+    `learner_config_dict`.
     """
 
     enabled: bool = False
     #: Compute and log the utility and the plasticity correlates, but never
-    #: replace anything. This is docs/25 Proposal A: it cannot change a run's
+    #: replace anything. This is docs/continual_backprop.md §4.1 (Proposal A): it cannot change a run's
     #: trajectory, and it answers whether this system loses plasticity at all -
     #: which is the question the mechanism is only worth enabling *after*.
     metrics_only: bool = False
@@ -182,8 +185,8 @@ class CBPConfig:
     #: `nature` here for the same reason; a new run's default is `arxiv`. See `COUNT_RULES`.
     count_rule: str = "nature"
     #: Move a replaced unit's mean contribution into the next layer's bias before its
-    #: outgoing weights are zeroed, so the output does not jump (docs/29 R-13, #183). Off by
-    #: default: the papers' rule zeroes and leaves the bias alone, and `docs/16` section 16.13
+    #: outgoing weights are zeroed, so the output does not jump (gym-CDA docs/29 R-13, #183). Off by
+    #: default: the papers' rule zeroes and leaves the bias alone, and gym-CDA's `docs/16` §16.13
     #: measured CBP that way.
     compensate_mean: bool = False
     #: Mean |activation| below which a unit counts as dead, for the metric only.
@@ -221,12 +224,11 @@ class CBPConfig:
 
     @classmethod
     def from_dict(cls, values: Optional[Dict[str, Any]]) -> "CBPConfig":
-        """Build from the config group, whose keys carry a `cbp_` prefix.
+        """Build from a legacy `continual_backprop` group, whose keys carry a `cbp_` prefix.
 
-        The prefix exists because `config_loader.flatten` collapses every group
-        of `train_config.json` into one namespace and raises on a duplicate
-        key, so `enabled` or `utility` as bare names would be a collision
-        waiting to happen with any group added later.
+        That group is what a checkpoint written while CBP was part of gym-CDA
+        carries (`learner._as_config`). It predates `optimizer` and
+        `count_rule`, so they are not read here and take the legacy defaults.
         """
         values = values or {}
         fields = {
@@ -303,7 +305,7 @@ class ReplaceableLayer:
         return self.incoming.weight.requires_grad
 
     def incoming_abs_sum(self) -> torch.Tensor:
-        """`sum_j |w_in[j, i]|` per unit `i`."""
+        """`sum_j |w_in[i, j]|` per unit `i`: row `i` of the `(n_units, fan_in)` weight."""
         return self.incoming.weight.detach().abs().sum(dim=1)
 
     def outgoing_abs_sum(self) -> torch.Tensor:
@@ -693,7 +695,7 @@ class CBPLayerState:
     Held on the Learner rather than registered as module buffers, deliberately:
     a champion snapshot is an inference-only copy of the module, and state
     attached to the module would ride into every one of them as dead weight -
-    the problem `jepa_learner`'s `_TRAINING_ONLY` list exists to solve. Keeping
+    the problem cda-jepa's JEPA learner keeps a training-only list to solve. Keeping
     it here avoids the problem instead of managing it.
     """
 
@@ -770,7 +772,7 @@ def _outgoing_abs_sum(layer: ReplaceableLayer) -> torch.Tensor:
 
 
 def _incoming_abs_sum(layer: ReplaceableLayer) -> torch.Tensor:
-    """`sum_j |w_in[j, i]|` per unit `i`."""
+    """`sum_j |w_in[i, j]|` per unit `i`."""
     return layer.incoming_abs_sum()
 
 
@@ -818,7 +820,7 @@ def activation_stats(
 
     Called from inside a forward hook, so it must not keep `h` or anything
     holding a reference to the autograd graph - the graph would then stay alive
-    until the next forward, which is the leak `jepa_learner.setup()` documents.
+    until the next forward, which is the leak cda-jepa's JEPA learner documents.
     Everything returned here is detached and of shape `(num_units,)`.
 
     `dev_abs_mean` is `mean_batch |h - f_hat|` and has to be computed here
@@ -847,7 +849,7 @@ def merge_stats(
 
     A layer can run more than once per step - each MoE expert once per top-k slot, the JEPA
     trunk on the masked context and again on the full observation - and the hook used to keep
-    only the last call, so a unit was judged on a partial, order-dependent view (docs/29 R-14,
+    only the last call, so a unit was judged on a partial, order-dependent view (gym-CDA docs/29 R-14,
     #184). Each statistic is a mean over `rows`, so weighting by rows gives exactly the mean
     over all rows of both calls, as if they had been one batch.
     """
@@ -933,8 +935,8 @@ def _reinitialise(
     instant of replacement - the new random incoming weights are multiplied by
     zero and reach the output not at all. What *does* move the function is
     dropping the old unit's contribution, and nothing makes that zero; it is
-    bounded only by having selected the minimum-utility unit. See docs/16
-    section 16.13 for the measured decomposition.
+    bounded only by having selected the minimum-utility unit. See gym-CDA's
+    docs/16 §16.13 for the measured decomposition.
     """
     if isinstance(layer, RecurrentLayer):
         layer.reinitialise(index, generator)
@@ -1038,7 +1040,7 @@ def effective_rank(activations: torch.Tensor, threshold: float = 0.99) -> float:
     own input distribution - so this falls when the network loses capacity and
     *also* when the agent simply starts visiting a narrower set of book states.
     Measured on this repo, the second effect alone moved it by -24.6% while the
-    network's capacity on a fixed corpus did not move at all (docs/16 §16.16).
+    network's capacity on a fixed corpus did not move at all (gym-CDA docs/16 §16.16).
     `train/probe/rank.py` is the version that holds the inputs still.
 
     The definition is gym-CDA's `train.probe.rank.effective_rank`, called

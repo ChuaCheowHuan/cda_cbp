@@ -17,8 +17,8 @@ did: `"optimizer": "torch_adam", "count_rule": "nature"` repeats it.
 | Key | Default | Meaning |
 |---|---|---|
 | `metrics_only` | `false` | Measure the correlates of plasticity loss without replacing anything |
-| `replacement_rate` | `0.0001` | Units replaced per mature unit per optimiser step, through an accumulator |
-| `maturity_threshold` | `100` | Optimiser steps a unit must age before it can be replaced |
+| `replacement_rate` | `0.0001` | Units replaced per unit per step (an optimiser step, or an iteration under `fire_on: "iteration"`), through an accumulator; `count_rule` says which units are counted |
+| `maturity_threshold` | `100` | Steps a unit must age before it can be replaced (optimiser steps, or iterations under `fire_on: "iteration"`) |
 | `utility_decay` | `0.99` | Decay of the running utility and mean-activation averages, in [0, 1) |
 | `utility` | `"overall"` | `contribution`, `mean_corrected` or `overall` |
 | `scope` | `"feedforward"` | `feedforward`, or `recurrent` to add an LSTM core's top layer |
@@ -51,7 +51,7 @@ named as they are now. What CBP is and how it composes with gym-CDA's Learner is
 
 ### Cadence
 
-`replacement_rate` and `maturity_threshold` are both counted in OPTIMISER STEPS - not environment steps, and not training iterations. This repo takes 4 Adam steps per iteration at its defaults (num_epochs 4 over one full batch, minibatch_size null) against the 320 of the papers' Continual PPO (10 epochs x 32 minibatches), so the papers' own PPO values cannot be transplanted: their maturity threshold of 1e4 would be 2,500 iterations here, against a default run of 16, and no unit would ever become mature. `maturity_threshold` is therefore the arXiv CBP default of 100 rather than the Nature PPO value. Watch `cbp_replacements` and `cbp_mature_unit_frac`: a continual backprop that never fires looks exactly like one that is working, and at low replacement rates over a short run not firing is the expected outcome.
+`replacement_rate` and `maturity_threshold` are both counted in OPTIMISER STEPS - not environment steps, and not training iterations - under the default `fire_on: "adam_step"`. Under `fire_on: "iteration"` a unit ages once per iteration, so both count iterations, 4x fewer at the defaults below. This repo takes 4 Adam steps per iteration at its defaults (num_epochs 4 over one full batch, minibatch_size null) against the 320 of the papers' Continual PPO (10 epochs x 32 minibatches), so the papers' own PPO values cannot be transplanted: their maturity threshold of 1e4 would be 2,500 iterations here, against a default run of 16, and no unit would ever become mature. `maturity_threshold` is therefore the arXiv CBP default of 100 rather than the Nature PPO value. Watch `cbp_replacements` and `cbp_mature_unit_frac`: a continual backprop that never fires looks exactly like one that is working, and at low replacement rates over a short run not firing is the expected outcome.
 
 ### Metrics only
 

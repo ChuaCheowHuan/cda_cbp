@@ -24,9 +24,11 @@ NAME = "cbp"
 DEFAULTS: Dict[str, Any] = {
     # Measure the correlates of plasticity loss, replace nothing.
     "metrics_only": False,
-    # Units replaced per mature unit per optimiser step (an accumulator, not a probability).
+    # Units replaced per unit per step (an accumulator, not a probability); a step is an
+    # optimiser step, or an iteration under fire_on "iteration". count_rule picks the units.
     "replacement_rate": 1e-4,
-    # Optimiser steps a unit must age before it can be replaced.
+    # Steps a unit must age before it can be replaced (optimiser steps, or iterations under
+    # fire_on "iteration").
     "maturity_threshold": 100,
     # Decay of the running utility average, in [0, 1).
     "utility_decay": 0.99,
