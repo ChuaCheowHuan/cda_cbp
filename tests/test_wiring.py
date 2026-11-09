@@ -517,14 +517,16 @@ class TestSeveralLearnersAgree:
 
     def test_two_learners_replace_the_same_units(self):
         config = TrainConfig(
-            **TEST_CFG,
-            **cbp(
-                replacement_rate=FIRING["replacement_rate"],
-                maturity_threshold=FIRING["maturity_threshold"],
-                metrics_every_n_updates=1,
-            ),
-            num_learners=2,
-            num_cpus_per_learner=1,
+            **{
+                **TEST_CFG,
+                **cbp(
+                    replacement_rate=FIRING["replacement_rate"],
+                    maturity_threshold=FIRING["maturity_threshold"],
+                    metrics_every_n_updates=1,
+                ),
+                "num_learners": 2,
+                "num_cpus_per_learner": 1,
+            }
         )
         algo = build_config(config)[0].build_algo()
         try:
