@@ -45,9 +45,11 @@ the paper would never be reached. See `docs/settings.md` (Cadence) and
 
 from __future__ import annotations
 
+import logging
 import math
+import numbers
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -55,6 +57,8 @@ from lop.algos.cbp_linear import get_layer_bound
 
 from gym_continuousDoubleAuction.train.model.layout import TrunkOutput, trunk_outputs
 from gym_continuousDoubleAuction.train.probe.rank import effective_rank as probe_effective_rank
+
+logger = logging.getLogger(__name__)
 
 #: Utility measures, in the order Appendix C ablates them.
 #:
@@ -154,6 +158,11 @@ _PASSTHROUGH = (
 #: Modules that *are* the hidden nonlinearity, i.e. whose output is `h`.
 _ACTIVATIONS = (nn.ReLU, nn.GELU, nn.Tanh, nn.ELU, nn.SiLU, nn.Sigmoid, nn.LeakyReLU)
 
+#: The bounded activations, and the |h| past which their local gradient vanishes.
+#: Only these can be saturated in the arXiv Appendix G sense; GELU and the other
+#: unbounded activations keep a gradient near 1 for large inputs.
+_SATURATION_CUTOFFS = {nn.Tanh: 0.9, nn.Sigmoid: 0.9}
+
 
 @dataclass(frozen=True)
 class CBPConfig:
@@ -196,6 +205,21 @@ class CBPConfig:
     metrics_every_n_updates: int = 10
 
     def __post_init__(self) -> None:
+        # Types first: a string such as "false" is truthy, and a string rate would
+        # raise a bare TypeError from the range check below. Both were accepted
+        # silently enough to run the wrong experiment (#12).
+        for name in ("enabled", "metrics_only", "reset_optimizer_state", "compensate_mean"):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"{name} must be a bool, got {getattr(self, name)!r}.")
+        for name in ("replacement_rate", "utility_decay", "dead_unit_threshold"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, numbers.Real):
+                raise ValueError(f"{name} must be a real number, got {value!r}.")
+        for name in ("maturity_threshold", "metrics_every_n_updates"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, numbers.Integral):
+                raise ValueError(f"{name} must be an integer, got {value!r}.")
+
         if self.utility not in UTILITY_MEASURES:
             raise ValueError(
                 f"Unknown utility {self.utility!r}. Available: {', '.join(UTILITY_MEASURES)}."
@@ -221,6 +245,18 @@ class CBPConfig:
             raise ValueError(f"replacement_rate must be >= 0, got {self.replacement_rate}.")
         if self.maturity_threshold < 0:
             raise ValueError(f"maturity_threshold must be >= 0, got {self.maturity_threshold}.")
+        if self.metrics_every_n_updates < 1:
+            raise ValueError(
+                f"metrics_every_n_updates must be >= 1, got {self.metrics_every_n_updates}."
+            )
+        if self.dead_unit_threshold < 0.0:
+            raise ValueError(f"dead_unit_threshold must be >= 0, got {self.dead_unit_threshold}.")
+        if self.compensate_mean and self.scope == "recurrent":
+            logger.warning(
+                "compensate_mean is set with scope='recurrent': an LSTM layer has no "
+                "single consumer bias to compensate, so the setting applies only to "
+                "the feed-forward layers."
+            )
 
     @classmethod
     def from_dict(cls, values: Optional[Dict[str, Any]]) -> "CBPConfig":
@@ -304,13 +340,28 @@ class ReplaceableLayer:
     def trained(self) -> bool:
         return self.incoming.weight.requires_grad
 
+    @property
+    def saturation_cutoff(self) -> Optional[float]:
+        """The |h| past which this layer's activation saturates, or None.
+
+        None means the activation is unbounded (GELU, SiLU, ReLU, or no
+        activation), so "saturated" does not describe any of its units. The
+        metric is left out for those layers rather than reported as zero, so a
+        module's max is over the layers where the number means something.
+        """
+        for kind, cutoff in _SATURATION_CUTOFFS.items():
+            if isinstance(self.activation, kind):
+                return cutoff
+        return None
+
     def incoming_abs_sum(self) -> torch.Tensor:
         """`sum_j |w_in[i, j]|` per unit `i`: row `i` of the `(n_units, fan_in)` weight."""
         return self.incoming.weight.detach().abs().sum(dim=1)
 
     def outgoing_abs_sum(self) -> torch.Tensor:
         """`sum_k |w_out[i, k]|` per unit `i`, over every consumer."""
-        return sum(out.weight.detach().abs().sum(dim=0) for out in self.outgoing)
+        terms = [out.weight.detach().abs().sum(dim=0) for out in self.outgoing]
+        return sum(terms, torch.zeros(self.num_units, device=self.device))
 
     def mean_weight_magnitude(self) -> float:
         return float(self.incoming.weight.detach().abs().mean().item())
@@ -396,6 +447,11 @@ class RecurrentLayer:
     def trained(self) -> bool:
         return self._p("weight_ih").requires_grad
 
+    @property
+    def saturation_cutoff(self) -> Optional[float]:
+        """An LSTM's hidden state is a tanh, so it has tanh's 0.9 cutoff."""
+        return _SATURATION_CUTOFFS[nn.Tanh]
+
     def incoming_abs_sum(self) -> torch.Tensor:
         rows = self._gate_rows()
         total = self._p("weight_ih").detach().abs()[rows].sum(dim=(0, 2))
@@ -459,6 +515,11 @@ class RecurrentLayer:
             for out in self.outgoing:
                 for buffer in _per_weight_slots(optimizer.state.get(out.weight) or {}, out.weight):
                     buffer[:, index] = 0.0
+
+
+#: A replaceable layer: a Linear block or an LSTM core. Both expose the same
+#: small interface, which is why the algorithm does not branch on the type.
+Layer = Union[ReplaceableLayer, RecurrentLayer]
 
 
 # --- Layer discovery --------------------------------------------------------
@@ -608,9 +669,7 @@ def _recurrent_layers(module: nn.Module) -> List["RecurrentLayer"]:
     return layers
 
 
-def find_replaceable_layers(
-    module: nn.Module, scope: str = "feedforward"
-) -> List[ReplaceableLayer]:
+def find_replaceable_layers(module: nn.Module, scope: str = "feedforward") -> List[Layer]:
     """Every layer of this module whose units CBP may replace.
 
     Two sources, and both are needed for the default network:
@@ -645,7 +704,7 @@ def find_replaceable_layers(
     if callable(unwrapped):
         module = unwrapped()
 
-    layers: List[ReplaceableLayer] = []
+    layers: List[Layer] = []
     for name, sub in module.named_modules():
         if isinstance(sub, nn.Sequential):
             layers.extend(_sequential_layers(sub, name))
@@ -667,7 +726,7 @@ def find_replaceable_layers(
     return unique
 
 
-def _is_trained(layer: ReplaceableLayer) -> bool:
+def _is_trained(layer: Layer) -> bool:
     """Whether gradient descent is what maintains this layer's weights.
 
     Continual Backprop replaces units that *learning* has left useless, and
@@ -766,19 +825,19 @@ def bias_corrected(value: torch.Tensor, age: torch.Tensor, decay: float) -> torc
 # --- The algorithm ----------------------------------------------------------
 
 
-def _outgoing_abs_sum(layer: ReplaceableLayer) -> torch.Tensor:
+def _outgoing_abs_sum(layer: Layer) -> torch.Tensor:
     """`sum_k |w_out[i, k]|` per unit `i`, over every consumer."""
     return layer.outgoing_abs_sum()
 
 
-def _incoming_abs_sum(layer: ReplaceableLayer) -> torch.Tensor:
+def _incoming_abs_sum(layer: Layer) -> torch.Tensor:
     """`sum_j |w_in[i, j]|` per unit `i`."""
     return layer.incoming_abs_sum()
 
 
 def update_utility(
     state: CBPLayerState,
-    layer: ReplaceableLayer,
+    layer: Layer,
     stats: Dict[str, torch.Tensor],
     config: CBPConfig,
 ) -> torch.Tensor:
@@ -813,8 +872,32 @@ def update_utility(
     return bias_corrected(state.utility, state.age, decay)
 
 
+def activation_rows(h: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """`h` as one row per observation, keeping only rows where `mask` is true.
+
+    A recurrent module gives `(B, T, n)` and RLlib's `loss_mask` is `(B, T)` or
+    `(B*T,)`; every real timestep is an observation and every padded one is
+    not. Flattening both before masking is what makes the two layouts agree.
+    """
+    h = h.detach()
+    if h.dim() > 2:
+        h = h.reshape(-1, h.shape[-1])
+    if mask is not None:
+        mask = mask.detach().to(device=h.device, dtype=torch.bool).reshape(-1)
+        if mask.numel() != h.shape[0]:
+            raise ValueError(
+                f"loss_mask has {mask.numel()} rows but the activations have {h.shape[0]}; "
+                "the hook cannot tell which rows are padding."
+            )
+        h = h[mask]
+    return h
+
+
 def activation_stats(
-    h: torch.Tensor, state: CBPLayerState, config: CBPConfig
+    h: torch.Tensor,
+    state: CBPLayerState,
+    config: CBPConfig,
+    mask: Optional[torch.Tensor] = None,
 ) -> Dict[str, torch.Tensor]:
     """Reduce a minibatch of activations to the per-unit quantities CBP needs.
 
@@ -823,15 +906,15 @@ def activation_stats(
     until the next forward, which is the leak cda-jepa's JEPA learner documents.
     Everything returned here is detached and of shape `(num_units,)`.
 
+    `mask` is RLlib's `loss_mask`, applied so a stateful encoder's zero-padded
+    timesteps are not counted as activations (#10). A forward without a mask
+    (the MLP encoders) uses every row.
+
     `dev_abs_mean` is `mean_batch |h - f_hat|` and has to be computed here
     rather than recovered later: it needs the bias-corrected running mean at
     the time of the forward pass, and no reduction of `h` alone determines it.
     """
-    h = h.detach()
-    if h.dim() > 2:
-        # A recurrent or token-major module gives (B, T, n); every row is an
-        # independent observation of the unit, so flatten rather than pick one.
-        h = h.reshape(-1, h.shape[-1])
+    h = activation_rows(h, mask)
     f_hat = bias_corrected(state.mean_act, state.age, config.utility_decay)
     return {
         "mean": h.mean(dim=0),
@@ -840,6 +923,71 @@ def activation_stats(
         # How many rows these means are over, so calls can be combined exactly (`merge_stats`).
         "rows": torch.tensor(float(h.shape[0]), device=h.device),
     }
+
+
+def zero_stats(num_units: int, device=None) -> Dict[str, torch.Tensor]:
+    """The statistics of a call that observed no rows, for a distributed step.
+
+    Every learner must enter the same collectives in the same order. A layer
+    that produced no statistics on this learner (its module was not in this
+    learner's minibatch) therefore contributes zero rows instead of skipping
+    the all-reduce and deadlocking the others.
+    """
+    return {
+        "mean": torch.zeros(num_units, device=device),
+        "abs_mean": torch.zeros(num_units, device=device),
+        "dev_abs_mean": torch.zeros(num_units, device=device),
+        "rows": torch.tensor(0.0, device=device),
+    }
+
+
+def synchronise_stats(
+    stats: Dict[str, torch.Tensor],
+) -> Optional[Dict[str, torch.Tensor]]:
+    """All-reduce one layer's statistics across the learner group, weighted by rows.
+
+    Several learners keep one set of weights by averaging gradients, but CBP
+    replaces units directly and each learner sees only its own minibatch. They
+    would rank different units and drift apart (gym-CDA R-12, #182). Reducing the
+    statistics first makes every learner update the same utility from the same
+    data, so the replacement choice is identical (#31).
+
+    Returns `stats` unchanged outside a distributed run, and None when no
+    learner observed a row for this layer in this step.
+    """
+    if (
+        not torch.distributed.is_available()
+        or not torch.distributed.is_initialized()
+        or torch.distributed.get_world_size() <= 1
+    ):
+        return stats
+    rows = stats["rows"]
+    total_rows = rows.clone()
+    torch.distributed.all_reduce(total_rows, op=torch.distributed.ReduceOp.SUM)
+    if float(total_rows) == 0.0:
+        return None
+    reduced: Dict[str, torch.Tensor] = {"rows": total_rows}
+    for key in ("mean", "abs_mean", "dev_abs_mean"):
+        weighted = stats[key] * rows
+        torch.distributed.all_reduce(weighted, op=torch.distributed.ReduceOp.SUM)
+        reduced[key] = weighted / total_rows
+    return reduced
+
+
+def merge_rank_sample(old: Optional[torch.Tensor], new: torch.Tensor, limit: int) -> torch.Tensor:
+    """Combine two calls' activation rows, keeping at most `limit` of them.
+
+    A layer can run more than once per step (each ``moe_transformer`` expert once
+    per top-k slot; the JEPA trunk on the masked and the full input), and the
+    rank metric should see both calls, not the last one. Rows are sampled evenly
+    across the concatenation, including the first and last, so neither call is
+    dropped when the two together exceed `limit`.
+    """
+    combined = new if old is None else torch.cat([old, new], dim=0)
+    if combined.shape[0] <= limit:
+        return combined
+    indices = torch.linspace(0, combined.shape[0] - 1, limit, device=combined.device)
+    return combined[indices.round().long()]
 
 
 def merge_stats(
@@ -865,7 +1013,7 @@ def merge_stats(
 
 def select_and_replace(
     state: CBPLayerState,
-    layer: ReplaceableLayer,
+    layer: Layer,
     corrected_utility: torch.Tensor,
     config: CBPConfig,
     generator: Optional[torch.Generator] = None,
@@ -923,7 +1071,7 @@ def select_and_replace(
 
 def _reinitialise(
     state: CBPLayerState,
-    layer: ReplaceableLayer,
+    layer: Layer,
     index: int,
     generator: Optional[torch.Generator],
     optimizer: Optional[torch.optim.Optimizer],
@@ -973,8 +1121,9 @@ def _reinitialise(
                 config.utility_decay,
             )[0]
             for out in layer.outgoing:
-                if out.bias is not None:
-                    out.bias += out.weight[:, index] * mean
+                bias = out.bias
+                if bias is not None:
+                    bias.add_(out.weight[:, index] * mean)
 
         for out in layer.outgoing:
             out.weight[:, index] = 0.0
@@ -1054,7 +1203,7 @@ def effective_rank(activations: torch.Tensor, threshold: float = 0.99) -> float:
 
 
 def plasticity_metrics(
-    layer: ReplaceableLayer,
+    layer: Layer,
     stats: Dict[str, torch.Tensor],
     corrected_utility: torch.Tensor,
     config: CBPConfig,
@@ -1071,18 +1220,23 @@ def plasticity_metrics(
     three healthy, so they are what says whether it is working - and, run with
     `metrics_only`, whether there is anything for it to work on.
 
-    `saturated_frac` is arXiv Appendix G and is specific to a bounded
+    `saturated_unit_frac` is arXiv Appendix G and is specific to a bounded
     activation: this project's default is tanh, where a unit past |h| > 0.9 has
-    a vanishing local gradient and is on its way to being stuck.
+    a vanishing local gradient and is on its way to being stuck. A GELU or
+    other unbounded layer has no saturated units in that sense, so the key is
+    omitted for it rather than reported as zero; `_cbp_log`'s max is then over
+    the layers where the number means something.
     """
     abs_mean = stats["abs_mean"]
     metrics = {
         "dead_unit_frac": float((abs_mean < config.dead_unit_threshold).float().mean().item()),
-        "saturated_unit_frac": float((abs_mean > 0.9).float().mean().item()),
         "mean_weight_magnitude": layer.mean_weight_magnitude(),
         "utility_min": float(corrected_utility.min().item()),
         "utility_median": float(corrected_utility.median().item()),
     }
+    cutoff = layer.saturation_cutoff
+    if cutoff is not None:
+        metrics["saturated_unit_frac"] = float((abs_mean > cutoff).float().mean().item())
     if activations is not None:
         # Named for the batch it is measured on, not for what it looks like it
         # measures. It is NOT a clean read of the network's capacity: the

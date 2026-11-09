@@ -14,7 +14,7 @@ healthy at once, so they are read together rather than individually.
 | `cbp_dead_unit_frac` | max | Rising. Units whose mean \|activation\| has fallen below the threshold and stopped contributing |
 | `cbp_mean_weight_magnitude` | mean | Rising. Weight growth is the correlate L2 addresses and CBP also suppresses |
 | `cbp_batch_effective_rank` | mean | **Confounded — see below.** Units becoming redundant, but measured on the training minibatch |
-| `cbp_saturated_unit_frac` | max | Rising. Specific to tanh, which is this project's default: past \|h\| > 0.9 the local gradient vanishes. It is also computed for the GELU layers of `transformer` and `moe_transformer`, where it does not mean saturation ([#28](https://github.com/ChuaCheowHuan/cda_cbp/issues/28)) |
+| `cbp_saturated_unit_frac` | max | Rising. Bounded activations only: tanh (this project's default) and sigmoid, where past \|h\| > 0.9 the local gradient vanishes. It is **absent** for the GELU layers of `transformer` and `moe_transformer` (and for ReLU/SiLU), rather than reported as zero, because a strongly active GELU unit is healthy; the module value is the max over the layers where the number means something ([#28](https://github.com/ChuaCheowHuan/cda_cbp/issues/28)) |
 | `cbp_utility_min` / `_median` | min / mean | A widening gap means capacity is concentrating in fewer units |
 | `cbp_mature_unit_frac` | mean | **Pinned at 0.0 means the mechanism cannot fire at all** — see below |
 | `cbp_replacements` | **sum** | **Flat at 0 means it never fired** |
@@ -32,7 +32,10 @@ the shipped replacement rate over a short run, for the cadence reason in
 
 `cbp_batch_effective_rank` runs an SVD and is therefore computed every `metrics_every_n_updates`
 optimiser steps rather than every one; the same counter gates keeping an activation sample in the
-forward hook at all.
+forward hook at all. A layer that runs more than once in a step contributes rows from every call
+(the sample is merged, not overwritten), and a stateful encoder's zero-padded timesteps are
+excluded from both the statistics and the sample ([#27](https://github.com/ChuaCheowHuan/cda_cbp/issues/27),
+[#10](https://github.com/ChuaCheowHuan/cda_cbp/issues/10)).
 
 ### The rank metric is confounded, and was renamed to say so
 

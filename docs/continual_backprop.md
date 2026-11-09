@@ -562,7 +562,9 @@ long, resumable runs, that is a real failure and an invisible one — the run co
 worse, and nothing reports why.
 
 So CBP state goes through `Learner.get_state` / `set_state`, pinned by a real save-and-restore in
-`tests/test_wiring.py`.
+`tests/test_wiring.py`. The replacement generator's state and the update counter ride there too
+(#14): a resume otherwise restarts the random stream and the metrics cadence, so the units drawn
+after it differ from an uninterrupted run.
 
 **The knobs themselves are a different story, and this note got it wrong first time.** It said CBP's
 settings are not `STRUCTURAL_CONFIG_KEYS` — true — and concluded that a resume may therefore
@@ -619,7 +621,7 @@ a changed config. That is the whole envelope the bugs lived outside of.
 |---|---|
 | GPU | CBP state allocated on the CPU while the module had already been moved to CUDA by `super().build()`. `h - f̂` raises on the first forward pass of any GPU run |
 | GPU, later | A CPU `torch.Generator` filling a CUDA tensor. Does not raise at build time — only when the accumulator first crosses 1.0, tens of optimiser steps in |
-| `num_learners > 1` | **Now refused** when replacing (this package's `validate`, R-12): each learner picks the unit to replace from its own minibatch, outside the gradient, so the replicas can drift apart. `metrics_only` replaces nothing and is allowed. The row below is the earlier, separate wrapping problem. RLlib wraps each module in `TorchDDPRLModule`, which forwards no attributes, so the trunk-to-head join found nothing and the default network silently got 2 replaceable layers instead of 4. It also prefixes every `named_modules` name with `module.`, which would have made state keys differ between distributed and single-learner runs |
+| `num_learners > 1` | Each learner saw only its own minibatch, outside the gradient, so the replicas could rank different units and drift apart. **Fixed** (#31): the per-layer statistics are all-reduced, weighted by rows, before the utility update, so every learner replaces the same units. The earlier, separate wrapping problem is also covered: RLlib wraps each module in `TorchDDPRLModule`, which forwards no attributes, so the trunk-to-head join found nothing and the default network silently got 2 replaceable layers instead of 4. It also prefixes every `named_modules` name with `module.`, which would have made state keys differ between distributed and single-learner runs |
 | Restore | §3.5 |
 
 The three code fixes are small — derive the device from `layer.incoming.weight`, build the
@@ -683,7 +685,7 @@ paper's claim for CBP is precisely that it is the only method keeping all three 
 | `cbp_dead_unit_frac` | Fraction of units whose mean \|activation\| is below `dead_unit_threshold` | Nature Fig. 2d, ED Fig. 4 |
 | `cbp_mean_weight_magnitude` | Mean \|w\| of incoming weights | Nature ED Fig. 4 |
 | `cbp_batch_effective_rank` | Threshold rank (99% of singular mass, not the papers' entropy-based rank) of the **training minibatch's** activations. Confounded by the policy's own input distribution — §3.8; `train/probe/rank.py` is the comparable version | Nature Methods |
-| `cbp_saturated_unit_frac` | Fraction with mean \|activation\| > 0.9 — the tanh failure | arXiv App. G |
+| `cbp_saturated_unit_frac` | Fraction with mean \|activation\| > 0.9, for bounded activations only (tanh, sigmoid); absent for GELU/ReLU, where large activations are healthy | arXiv App. G |
 | `cbp_utility_min` / `_median` | The CBP utility spread: how unequally capacity is used | arXiv eqs. 5–7 |
 | `cbp_mature_unit_frac` | Fraction old enough to be replaceable | §3.6 |
 | `cbp_replacements` | Cumulative replacements | §3.6 |
@@ -877,15 +879,14 @@ Related work, for the alternatives §1.2 compares against:
 
 ## Review findings (R-12 to R-14)
 
-R-12 is guarded rather than fixed and is open in this package
-([#31](https://github.com/ChuaCheowHuan/cda_cbp/issues/31)); R-13 and
-R-14 are fixed ([R-13](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/29_fixed_issues.md#from-the-2026-10-07-review)).
+R-12, R-13 and R-14 are fixed ([R-13/R-14](https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction/blob/master/docs/29_fixed_issues.md#from-the-2026-10-07-review));
+R-12's fix is [#31](https://github.com/ChuaCheowHuan/cda_cbp/issues/31).
 
-- **One learner.** Replacing with `num_learners > 1` is refused at config time (R-12, #182).
-  Averaged gradients keep several learners identical; a replacement is a direct overwrite chosen
-  per learner, so nothing would pull the copies back together. The proper fix is to synchronise
-  the choice (all-reduce the utilities or broadcast learner 0's index) and test it on a real
-  two-learner run.
+- **Several learners.** Replacing with `num_learners > 1` used to be refused (R-12, #182).
+  Averaged gradients keep several learners identical, but a replacement is a direct overwrite
+  chosen per learner, so nothing pulled the copies back together. Each layer's statistics are now
+  all-reduced across the learner group before the utility update, so every learner ranks the same
+  units; the new weights come from generators seeded identically on every learner.
 - **Mean compensation.** `compensate_mean` (off by default) adds a replaced unit's bias-corrected
   mean activation times its outgoing weights to the next layer's bias before zeroing them (R-13,
   #183). A saturated tanh unit looks useless to `overall` utility (its activation barely varies) and is

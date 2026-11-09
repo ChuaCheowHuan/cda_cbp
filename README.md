@@ -55,7 +55,7 @@ every setting.
 | | |
 |---|---|
 | Encoders | all of gym-CDA's; `lstm` needs `"scope": "recurrent"` (otherwise it has nothing to replace, and says so) |
-| Learners | `num_learners` 0 or 1 when replacing; any number with `metrics_only` |
+| Learners | any number; when replacing, the statistics are all-reduced so every learner replaces the same units |
 | Composition | wraps every other extension's Learner mixin (`learner_order` 100); keeps the MoE and JEPA loss terms |
 | Resumes | the settings are fixed for a run; checkpoints written with gym-CDA's built-in CBP resume with it on |
 | Optimiser | when replacing, the authors' `AdamGnT` (from the bundled, unchanged `lop` code), so a replacement resets Adam's timestep per weight; `"optimizer": "torch_adam"` keeps torch Adam |

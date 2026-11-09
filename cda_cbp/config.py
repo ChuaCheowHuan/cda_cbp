@@ -60,30 +60,11 @@ def to_cbp_config(settings: Dict[str, Any]) -> CBPConfig:
 
 
 def validate(settings: Dict[str, Any], train_config) -> None:
-    """Raise on a bad value, or a combination gym-CDA cannot run.
+    """Raise on a bad value.
 
-    Values are checked by building the algorithm's config. A run that also
-    sets gym-CDA's own `cbp_enabled` or `cbp_metrics_only` (while gym-CDA still
-    has them) would compose CBP twice, so it is refused. Replacing units with
-    several learners is refused too: each learner picks the unit to replace
-    from its own minibatch, outside the gradient, so the replicas would drift
-    apart (gym-CDA docs/15 R-12, #182). `metrics_only` replaces nothing and is
-    allowed.
+    Values are checked by building the algorithm's config. Replacing with
+    several learners is supported: each learner's statistics are all-reduced
+    before the replacement choice, so the replicas rank and replace the same
+    units (gym-CDA R-12, #182).
     """
     to_cbp_config(settings)
-    if getattr(train_config, "cbp_enabled", False) or getattr(
-        train_config, "cbp_metrics_only", False
-    ):
-        raise ValueError(
-            "extensions_enabled lists 'cbp' while cbp_enabled or cbp_metrics_only is also "
-            "set; that would apply Continual Backprop twice. Use the extension only, with "
-            "its settings under extension_settings['cbp']."
-        )
-    learners = getattr(train_config, "num_learners", 0) or 0
-    if learners > 1 and not settings["metrics_only"]:
-        raise ValueError(
-            f"extension 'cbp' with num_learners={learners}: continual backprop picks units "
-            "to replace from each learner's own minibatch, so the replicas would drift "
-            "apart. Use num_learners 0 or 1, or metrics_only, until the choice is "
-            "synchronised."
-        )

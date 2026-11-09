@@ -244,6 +244,8 @@ class TestTheHookSeesTheSequence:
         mixin._cbp_config = CBPConfig(enabled=True, scope="recurrent")
         mixin._cbp_state = {"m": {layer.name: CBPLayerState.zeros(H)}}
         mixin._cbp_stats, mixin._cbp_activations, mixin._cbp_updates = {}, {}, 1
+        mixin._cbp_collecting = True
+        mixin._cbp_loss_masks = {}
         handle = layer.hook_target.register_forward_hook(mixin._cbp_hook("m", layer))
         try:
             net(x)

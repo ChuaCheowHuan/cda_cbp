@@ -32,9 +32,14 @@ did: `"optimizer": "torch_adam", "count_rule": "nature"` repeats it.
 
 ## Rules
 
-- **One learner when replacing.** `num_learners > 1` is refused unless `metrics_only` is true: each
-  learner picks the unit to replace from its own minibatch, outside the gradient, so the replicas would
-  drift apart (gym-CDA R-12, issue #182).
+- **Types and ranges are checked.** A value of the wrong type is refused, not coerced: a non-empty
+  string is truthy, so `"metrics_only": "false"` used to run a metrics-only experiment, and
+  `"replacement_rate": "1e-4"` raised a bare `TypeError`. The booleans must be `bool`, the rates and
+  thresholds real numbers, and `maturity_threshold` / `metrics_every_n_updates` integers.
+  `metrics_every_n_updates` must be at least 1 and `dead_unit_threshold` non-negative.
+- **Several learners.** `num_learners > 1` is supported when replacing: each layer's per-unit
+  statistics are all-reduced across the learner group, weighted by rows, before the utility is
+  updated, so every learner ranks and replaces the same units (gym-CDA R-12, issue #182).
 - **A checkpoint keeps its own behaviour.** `optimizer` and `count_rule` are newer than the other keys. A
   checkpoint written before them records neither, and a missing key means what every run did then:
   `torch_adam` and `nature`. A new run gets the defaults in the table.
@@ -71,4 +76,4 @@ named as they are now. What CBP is and how it composes with gym-CDA's Learner is
 
 ### Compensating the mean
 
-`compensate_mean` adds a replaced unit's mean contribution (its bias-corrected running mean activation times its outgoing weights) to the next layer's bias before the outgoing weights are zeroed, so the output does not jump (gym-CDA docs/29 R-13). Without it a saturated tanh unit, which 'overall' utility ranks lowest because its activation barely varies, is replaced first and takes its constant contribution with it: on a constructed case one replacement moved the outputs by 8-10 standard deviations. Off by default: the papers zero the outgoing weights and leave the bias alone, and gym-CDA docs/16 §16.13 measured the real run that way, so switching it on is a different experiment. Run train.compare with it on and off before changing the default. Feed-forward layers only; a recurrent layer has no single consumer bias.
+`compensate_mean` adds a replaced unit's mean contribution (its bias-corrected running mean activation times its outgoing weights) to the next layer's bias before the outgoing weights are zeroed, so the output does not jump (gym-CDA docs/29 R-13). Without it a saturated tanh unit, which 'overall' utility ranks lowest because its activation barely varies, is replaced first and takes its constant contribution with it: on a constructed case one replacement moved the outputs by 8-10 standard deviations. Off by default: the papers zero the outgoing weights and leave the bias alone, and gym-CDA docs/16 §16.13 measured the real run that way, so switching it on is a different experiment. Run train.compare with it on and off before changing the default. Feed-forward layers only; a recurrent layer has no single consumer bias, so setting it with `scope: "recurrent"` warns and still applies it to the feed-forward layers.

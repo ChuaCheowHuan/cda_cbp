@@ -33,7 +33,7 @@ from gym_continuousDoubleAuction.train.train import (
 
 from lop.utils.AdamGnT import AdamGnT
 
-from cda_cbp.learner import CBP_STATE, CBPLearnerMixin
+from cda_cbp.learner import CBP_META, CBP_STATE, CBPLearnerMixin
 
 #: The shipped replacement rate fires roughly once per 39 optimiser steps over
 #: 256 units, and a test-length run performs a handful - so at the real value
@@ -263,6 +263,7 @@ class TestCBPOnTheLSTMCore:
                 "encoder.actor_encoder.lstm",
                 "encoder.critic_encoder.lstm",
             }
+        assert state[CBP_STATE][CBP_META]["updates"] == self.learner._cbp_updates
 
         ages = {
             (module_id, name): layer_state.age.clone()
@@ -340,7 +341,14 @@ class TestCBPStateSurvivesACheckpoint:
     def test_get_state_carries_the_cbp_block(self):
         state = self.learner.get_state()
         assert CBP_STATE in state
-        assert set(state[CBP_STATE]) == {"policy_0", "policy_1"}
+        assert set(state[CBP_STATE]) == {"policy_0", "policy_1", CBP_META}
+
+    def test_get_state_carries_the_rng_and_update_counter(self):
+        """A resume must draw the same replacements as an uninterrupted run (#14)."""
+        state = self.learner.get_state()
+        meta = state[CBP_STATE][CBP_META]
+        assert meta["updates"] == self.learner._cbp_updates
+        torch.testing.assert_close(meta["generator_state"], self.learner._cbp_generator.get_state())
 
     def test_state_round_trips_through_set_state(self):
         state = self.learner.get_state()
@@ -433,6 +441,8 @@ class TestCBPSurvivesARealSaveAndRestore:
             }
             for module_id, layers in learner._cbp_state.items()
         }
+        cls.saved_updates = learner._cbp_updates
+        cls.saved_generator_state = learner._cbp_generator.get_state().clone()
         save_checkpoint(original, cls.cfg, int(original.iteration))
         original.stop()
 
@@ -482,6 +492,12 @@ class TestCBPSurvivesARealSaveAndRestore:
             for layers in self.saved.values()
             for _utility, age, _r in layers.values()
         )
+
+    def test_the_rng_and_update_counter_come_back(self):
+        """Otherwise a resumed run redraws every replacement from the seed (#14)."""
+        learner = self.restored.learner_group._learner
+        assert learner._cbp_updates == self.saved_updates
+        torch.testing.assert_close(learner._cbp_generator.get_state(), self.saved_generator_state)
 
 
 class TestRestoreCannotChangeCBP:

@@ -30,6 +30,7 @@ from cda_cbp.cbp import (
     CBPConfig,
     CBPLayerState,
     ReplaceableLayer,
+    activation_rows,
     activation_stats,
     bias_corrected,
     effective_rank,
@@ -37,7 +38,9 @@ from cda_cbp.cbp import (
     mature_fraction,
     plasticity_metrics,
     select_and_replace,
+    synchronise_stats,
     update_utility,
+    zero_stats,
 )
 from cda_cbp.learner import CBP_STATE, CBPLearnerMixin
 from conftest import build_module, cbp, encoder_types, jepa_available, requires_jepa
@@ -150,6 +153,44 @@ class TestConfig:
             {"cbp_enabled": True, "cbp_replacement_rate": 0.5, "unrelated": 1}
         )
         assert config.enabled and config.replacement_rate == 0.5
+
+    @pytest.mark.parametrize(
+        "field, value, message",
+        [
+            ("metrics_only", "false", "metrics_only"),
+            ("reset_optimizer_state", "no", "reset_optimizer_state"),
+            ("compensate_mean", 1, "compensate_mean"),
+            ("replacement_rate", "1e-4", "replacement_rate"),
+            ("utility_decay", "0.9", "utility_decay"),
+            ("dead_unit_threshold", "0.01", "dead_unit_threshold"),
+            ("maturity_threshold", 1.0, "maturity_threshold"),
+            ("maturity_threshold", True, "maturity_threshold"),
+            ("metrics_every_n_updates", 1.0, "metrics_every_n_updates"),
+            ("metrics_every_n_updates", True, "metrics_every_n_updates"),
+        ],
+    )
+    def test_rejects_values_of_the_wrong_type(self, field, value, message):
+        """A truthy string is not a bool; it silently ran the wrong experiment (#12)."""
+        with pytest.raises(ValueError, match=message):
+            CBPConfig(**{field: value})
+
+    @pytest.mark.parametrize(
+        "field, value, message",
+        [
+            ("metrics_every_n_updates", 0, "metrics_every_n_updates"),
+            ("metrics_every_n_updates", -1, "metrics_every_n_updates"),
+            ("dead_unit_threshold", -0.1, "dead_unit_threshold"),
+        ],
+    )
+    def test_rejects_out_of_range_values(self, field, value, message):
+        with pytest.raises(ValueError, match=message):
+            CBPConfig(**{field: value})
+
+    def test_compensate_mean_on_a_recurrent_scope_warns(self, caplog):
+        """The feed-forward layers still honour it; the LSTM layer cannot."""
+        with caplog.at_level(logging.WARNING, logger="cda_cbp.cbp"):
+            CBPConfig(compensate_mean=True, scope="recurrent")
+        assert "compensate_mean" in caplog.text and "recurrent" in caplog.text
 
 
 # --- The utility measures ---------------------------------------------------
@@ -472,6 +513,30 @@ class TestDeterminism:
 # --- State ------------------------------------------------------------------
 
 
+class _CheckpointableBase:
+    from ray.rllib.utils.checkpoints import Checkpointable as _C
+
+    _check_component = _C._check_component
+
+    def get_state(self, components=None, *, not_components=None, **kwargs):
+        return {}
+
+    def set_state(self, state):
+        return None
+
+
+class _GeneratorLearner(CBPLearnerMixin, _CheckpointableBase):
+    """The smallest Learner that can round-trip CBP's generator and counter."""
+
+    def __init__(self):
+        seq, layer = simple_block(units=5)
+        self.seq = seq
+        self.layer = layer
+        self._cbp_state = {"m": {layer.name: CBPLayerState.zeros(layer.num_units)}}
+        self._cbp_generator = torch.Generator().manual_seed(11)
+        self._cbp_updates = 0
+
+
 class TestState:
     def test_round_trips(self):
         state = CBPLayerState.zeros(4)
@@ -487,6 +552,53 @@ class TestState:
         torch.testing.assert_close(restored.age, state.age)
         assert restored.accumulator == 0.75
         assert restored.replacements == 9
+
+    def test_the_generator_and_update_counter_round_trip(self):
+        """A resume must continue the same stream, not restart from the seed (#14)."""
+        first = _GeneratorLearner()
+        for _ in range(7):
+            torch.rand(1, generator=first._cbp_generator)
+        first._cbp_updates = 23
+        snapshot = first.get_state()
+
+        second = _GeneratorLearner()
+        second.set_state(snapshot)
+
+        assert second._cbp_updates == 23
+        expected = torch.rand(8, generator=first._cbp_generator)
+        actual = torch.rand(8, generator=second._cbp_generator)
+        torch.testing.assert_close(actual, expected)
+
+    def test_a_restored_generator_picks_the_same_replacement(self):
+        first = _GeneratorLearner()
+        first._cbp_state["m"][first.layer.name].age.fill_(10)
+        for _ in range(3):
+            torch.rand(1, generator=first._cbp_generator)
+        snapshot = first.get_state()
+
+        second = _GeneratorLearner()
+        second.seq.load_state_dict(first.seq.state_dict())
+        second.set_state(snapshot)
+
+        utility = torch.tensor([5.0, 0.1, 5.0, 5.0, 5.0])
+        config = CBPConfig(enabled=True, replacement_rate=1.0, maturity_threshold=0)
+        left = select_and_replace(
+            first._cbp_state["m"][first.layer.name],
+            first.layer,
+            utility,
+            config,
+            generator=first._cbp_generator,
+        )
+        right = select_and_replace(
+            second._cbp_state["m"][second.layer.name],
+            second.layer,
+            utility,
+            config,
+            generator=second._cbp_generator,
+        )
+
+        assert left == right == [1]
+        torch.testing.assert_close(first.layer.incoming.weight, second.layer.incoming.weight)
 
 
 # --- Metrics ----------------------------------------------------------------
@@ -514,6 +626,27 @@ class TestMetrics:
         assert metrics["dead_unit_frac"] == 0.5
         assert metrics["saturated_unit_frac"] == 0.25
 
+    @pytest.mark.parametrize("activation", [nn.GELU(), nn.ReLU(), None])
+    def test_unbounded_activations_have_no_saturation_metric(self, activation):
+        """A strongly active GELU unit is healthy, not saturated (#28)."""
+        linear_in, linear_out = nn.Linear(6, 4), nn.Linear(4, 3)
+        children = [linear_in] + ([activation] if activation is not None else []) + [linear_out]
+        seq = nn.Sequential(*children)
+        layer = ReplaceableLayer("block", seq[0], [seq[-1]], activation)
+        config = CBPConfig()
+        h = torch.full((4, 4), 10.0)  # far past tanh's 0.9
+        stats = activation_stats(h, CBPLayerState.zeros(4), config)
+        metrics = plasticity_metrics(layer, stats, torch.zeros(4), config)
+        assert "saturated_unit_frac" not in metrics
+
+    @pytest.mark.parametrize("activation", [nn.Tanh(), nn.Sigmoid()])
+    def test_bounded_activations_keep_the_saturation_metric(self, activation):
+        seq = nn.Sequential(nn.Linear(6, 4), activation, nn.Linear(4, 3))
+        layer = ReplaceableLayer("block", seq[0], [seq[2]], activation)
+        stats = activation_stats(torch.full((4, 4), 0.95), CBPLayerState.zeros(4), CBPConfig())
+        metrics = plasticity_metrics(layer, stats, torch.zeros(4), CBPConfig())
+        assert metrics["saturated_unit_frac"] == 1.0
+
     def test_mature_fraction_reports_a_mechanism_that_cannot_fire(self):
         """The metric that distinguishes 'no effect' from 'never ran'."""
         state = CBPLayerState.zeros(4)
@@ -538,6 +671,26 @@ class TestActivationStats:
         assert h.requires_grad
         stats = activation_stats(h, CBPLayerState.zeros(5), CBPConfig())
         assert not any(value.requires_grad for value in stats.values())
+
+    def test_a_loss_mask_drops_padded_rows(self):
+        """A stateful encoder's zero padding is not an activation (#10)."""
+        h = torch.randn(2, 5, 3)
+        mask = torch.tensor([[1, 1, 0, 0, 0], [1, 1, 1, 0, 0]], dtype=torch.bool)
+        stats = activation_stats(h, CBPLayerState.zeros(3), CBPConfig(), mask=mask)
+        valid = h.reshape(-1, 3)[mask.reshape(-1)]
+
+        assert int(stats["rows"]) == 5
+        torch.testing.assert_close(stats["mean"], valid.mean(0))
+        torch.testing.assert_close(activation_rows(h, mask), valid)
+
+    def test_a_loss_mask_with_the_wrong_number_of_rows_raises(self):
+        with pytest.raises(ValueError, match="loss_mask"):
+            activation_stats(
+                torch.randn(2, 5, 3),
+                CBPLayerState.zeros(3),
+                CBPConfig(),
+                mask=torch.ones(4, dtype=torch.bool),
+            )
 
 
 # --- Device placement -------------------------------------------------------
@@ -733,9 +886,7 @@ class TestAUnitIsJudgedOnEveryCallOfTheStep:
     judged on its last call alone."""
 
     @staticmethod
-    def _probe(units=4):
-        import torch.nn as nn
-
+    def _probe(units=4, activation=None):
         from cda_cbp.cbp import (
             CBPConfig,
             CBPLayerState,
@@ -746,8 +897,10 @@ class TestAUnitIsJudgedOnEveryCallOfTheStep:
         mixin = CBPLearnerMixin.__new__(CBPLearnerMixin)
         mixin._cbp_config = CBPConfig(enabled=True)
         mixin._cbp_state = {"m": {"t": CBPLayerState.zeros(units)}}
-        mixin._cbp_stats, mixin._cbp_activations, mixin._cbp_updates = {}, {}, 1
-        first, act = nn.Linear(3, units), nn.Tanh()
+        mixin._cbp_stats, mixin._cbp_activations, mixin._cbp_updates = {}, {}, 0
+        mixin._cbp_collecting = True
+        mixin._cbp_loss_masks = {}
+        first, act = nn.Linear(3, units), activation or nn.Tanh()
         layer = ReplaceableLayer("t", first, [nn.Linear(units, 2)], act)
         act.register_forward_hook(mixin._cbp_hook("m", layer))
         return mixin, first, act
@@ -795,6 +948,69 @@ class TestAUnitIsJudgedOnEveryCallOfTheStep:
         act(first(x))
 
         assert torch.allclose(mixin._cbp_stats[("m", "t")]["abs_mean"], act(first(x)).abs().mean(0))
+
+    def test_the_rank_sample_contains_both_calls(self):
+        """The rank metric must not see only the last call (#27)."""
+        mixin, first, act = self._probe(activation=nn.Identity())
+        a, b = torch.randn(600, 3), torch.randn(600, 3) * 5 + 3
+
+        act(first(a))
+        act(first(b))
+        sample = mixin._cbp_activations[("m", "t")]
+
+        assert sample.shape[0] == 1024
+        torch.testing.assert_close(sample[0], first(a)[0].detach())
+        torch.testing.assert_close(sample[-1], first(b)[-1].detach())
+
+    def test_a_small_rank_sample_keeps_every_row_from_both_calls(self):
+        mixin, first, act = self._probe(activation=nn.Identity())
+        a, b = torch.randn(20, 3), torch.randn(12, 3)
+
+        act(first(a))
+        act(first(b))
+
+        torch.testing.assert_close(
+            mixin._cbp_activations[("m", "t")],
+            torch.cat([first(a).detach(), first(b).detach()]),
+        )
+
+    def test_a_forward_outside_the_update_is_ignored(self):
+        """The GAE connector's `compute_values` pass must not be counted (#11)."""
+        mixin, first, act = self._probe()
+        mixin._cbp_collecting = False
+
+        act(first(torch.randn(16, 3)))
+
+        assert mixin._cbp_stats == {} and mixin._cbp_activations == {}
+
+    def test_the_hook_applies_the_loss_mask_to_stats_and_rank_sample(self):
+        mixin, first, act = self._probe(activation=nn.Identity())
+        x = torch.randn(2, 5, 3)
+        mask = torch.tensor([[1, 1, 0, 0, 0], [1, 1, 1, 0, 0]], dtype=torch.bool)
+        mixin._cbp_loss_masks = {"m": mask}
+
+        act(first(x))
+
+        stats = mixin._cbp_stats[("m", "t")]
+        sample = mixin._cbp_activations[("m", "t")]
+        assert int(stats["rows"]) == int(mask.sum()) == sample.shape[0]
+        torch.testing.assert_close(stats["abs_mean"], sample.abs().mean(0))
+
+    def test_the_update_brackets_collection(self):
+        seen = []
+
+        class Base:
+            def _uncompiled_update(learner, batch, **kwargs):
+                seen.append(learner._cbp_collecting)
+                return "result"
+
+        class Learner(CBPLearnerMixin, Base):
+            pass
+
+        learner = Learner()
+        assert learner._uncompiled_update({}) == "result"
+        assert seen == [True]
+        assert learner._cbp_collecting is False
 
 
 class TestMeanCompensation:
@@ -875,31 +1091,85 @@ class TestMeanCompensation:
         assert _config_fingerprint(ppo)["ext.cbp.compensate_mean"] is True
 
 
-class TestContinualBackpropNeedsOneLearner:
-    """docs/15 R-12 (#182): replacements are chosen per learner, outside the gradient.
+class TestContinualBackpropWithSeveralLearners:
+    """docs/15 R-12 (#182): the replacement choice is synchronised (#31).
 
-    Several learners keep one set of weights by averaging gradients. CBP overwrites weights
-    directly, each learner from its own minibatch, so two learners can replace different units
-    and drift apart with nothing to pull them back. Refused until the choice is synchronised.
+    Several learners keep one set of weights by averaging gradients. CBP
+    overwrites weights directly, so it all-reduces each layer's statistics
+    first; every learner then ranks and replaces the same units.
     """
 
-    def test_enabled_with_two_learners_is_refused_by_name(self):
-        from gym_continuousDoubleAuction.train.config import TrainConfig
-
-        with pytest.raises(ValueError, match=r"'cbp' with num_learners=2"):
-            TrainConfig(**cbp(), num_learners=2)
-
-    @pytest.mark.parametrize("learners", [0, 1])
-    def test_enabled_with_at_most_one_learner_is_fine(self, learners):
+    @pytest.mark.parametrize("learners", [0, 1, 2])
+    def test_any_learner_count_is_accepted(self, learners):
         from gym_continuousDoubleAuction.train.config import TrainConfig
 
         TrainConfig(**cbp(), num_learners=learners)
 
-    def test_measuring_only_with_many_learners_is_fine(self):
-        """`metrics_only` replaces nothing, so the replicas cannot diverge."""
+    def test_measuring_only_with_many_learners_is_still_fine(self):
         from gym_continuousDoubleAuction.train.config import TrainConfig
 
         TrainConfig(**cbp(metrics_only=True), num_learners=2)
+
+    def test_statistics_are_all_reduced_weighted_by_rows(self, monkeypatch):
+        """Rank 1's rows are combined with rank 2's, rather than overwriting them."""
+        import cda_cbp.cbp as cbp_module
+
+        distributed = cbp_module.torch.distributed
+        monkeypatch.setattr(distributed, "is_available", lambda: True)
+        monkeypatch.setattr(distributed, "is_initialized", lambda: True)
+        monkeypatch.setattr(distributed, "get_world_size", lambda: 2)
+
+        others = iter(
+            [
+                3.0,  # rows: rank 2 observed three
+                torch.tensor([6.0, 12.0]),  # mean * rows
+                torch.tensor([3.0, 6.0]),  # abs_mean * rows
+                torch.tensor([9.0, 18.0]),  # dev_abs_mean * rows
+            ]
+        )
+
+        def fake_all_reduce(tensor, op=None):
+            tensor.add_(others.__next__())
+
+        monkeypatch.setattr(distributed, "all_reduce", fake_all_reduce)
+        stats = {
+            "mean": torch.tensor([0.5, 1.0]),
+            "abs_mean": torch.tensor([1.0, 2.0]),
+            "dev_abs_mean": torch.tensor([2.0, 4.0]),
+            "rows": torch.tensor(2.0),
+        }
+
+        reduced = synchronise_stats(stats)
+
+        assert float(reduced["rows"]) == 5.0
+        torch.testing.assert_close(
+            reduced["mean"], (2 * stats["mean"] + 3 * torch.tensor([2.0, 4.0])) / 5
+        )
+        torch.testing.assert_close(
+            reduced["abs_mean"], (2 * stats["abs_mean"] + torch.tensor([3.0, 6.0])) / 5
+        )
+        torch.testing.assert_close(
+            reduced["dev_abs_mean"], (2 * stats["dev_abs_mean"] + torch.tensor([9.0, 18.0])) / 5
+        )
+
+    def test_zero_rows_means_nothing_to_update(self, monkeypatch):
+        import cda_cbp.cbp as cbp_module
+
+        distributed = cbp_module.torch.distributed
+        monkeypatch.setattr(distributed, "is_available", lambda: True)
+        monkeypatch.setattr(distributed, "is_initialized", lambda: True)
+        monkeypatch.setattr(distributed, "get_world_size", lambda: 2)
+        monkeypatch.setattr(distributed, "all_reduce", lambda tensor, op=None: None)
+        assert synchronise_stats(zero_stats(3)) is None
+
+    def test_outside_a_distributed_run_the_stats_are_unchanged(self):
+        stats = {
+            "mean": torch.ones(3),
+            "abs_mean": torch.ones(3),
+            "dev_abs_mean": torch.ones(3),
+            "rows": torch.tensor(4.0),
+        }
+        assert synchronise_stats(stats) is stats
 
 
 class TestDiscoveryMatchesTheRecordedLayers:

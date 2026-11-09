@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from lop.utils.AdamGnT import AdamGnT
+from ray.rllib.core.columns import Columns
 
 from gym_continuousDoubleAuction.logging_setup import get_logger
 from gym_continuousDoubleAuction.train.extensions import EXTENSIONS_CONFIG_KEY, settings_for
@@ -52,19 +53,28 @@ from cda_cbp.cbp import (
     CBPConfig,
     CBPLayerState,
     ReplaceableLayer,
+    activation_rows,
     activation_stats,
+    merge_rank_sample,
     merge_stats,
     find_replaceable_layers,
     mature_fraction,
     plasticity_metrics,
     select_and_replace,
+    synchronise_stats,
     update_utility,
+    zero_stats,
 )
 
 logger = get_logger(__name__)
 
 #: Key under which CBP's state rides in the Learner's checkpoint.
 CBP_STATE = "continual_backprop"
+
+#: Reserved key inside `CBP_STATE` for the generator state and update counter.
+#: A module id could in principle be any string, so this is namespaced rather
+#: than mistaken for one; checkpoints written before it simply lack the key.
+CBP_META = "__meta__"
 
 #: Key under which gym-CDA's own CBP config group rode on `learner_config_dict`
 #: before CBP moved into this package. A checkpoint written then still carries
@@ -144,6 +154,14 @@ class CBPLearnerMixin:
         self._cbp_handles: List[Any] = []
         self._cbp_updates = 0
         self._cbp_generator: Optional[torch.Generator] = None
+        #: True only while `_uncompiled_update` is running. Hooks ignore every
+        #: other forward: the GAE connector's `compute_values` pass and any
+        #: inference pass on the Learner must not enter the training statistics
+        #: (#11), and no-grad is not a reliable discriminator for both.
+        self._cbp_collecting = False
+        #: Per-module `loss_mask` for the update in flight, so a stateful
+        #: encoder's zero-padded timesteps are excluded (#10).
+        self._cbp_loss_masks: Dict[Any, torch.Tensor] = {}
 
         if not self._cbp_config.active:
             return
@@ -254,21 +272,30 @@ class CBPLearnerMixin:
         key = (module_id, layer.name)
 
         def hook(_module, _inputs, output):
+            if not getattr(self, "_cbp_collecting", False):
+                return
             # An `nn.LSTM` returns `(sequence, (h_n, c_n))`; the units' activations
             # are the sequence. A Linear or an activation returns the tensor.
             if isinstance(output, tuple) and output and torch.is_tensor(output[0]):
                 output = output[0]
             if not torch.is_tensor(output):
                 return
+            mask = self._cbp_loss_masks.get(module_id)
             state = self._cbp_state[module_id][layer.name]
-            stats = activation_stats(output, state, self._cbp_config)
+            stats = activation_stats(output, state, self._cbp_config, mask=mask)
+            if int(stats["rows"]) == 0:
+                # Every row in this batch was padding. There is no observation
+                # to average, and treating the empty mean as a value would
+                # poison the utility with NaNs.
+                return
             earlier = self._cbp_stats.get(key)
             self._cbp_stats[key] = stats if earlier is None else merge_stats(earlier, stats)
             if self._cbp_wants_rank_sample():
-                sample = output.detach()
-                if sample.dim() > 2:
-                    sample = sample.reshape(-1, sample.shape[-1])
-                self._cbp_activations[key] = sample[:_RANK_SAMPLE_ROWS].clone()
+                sample = activation_rows(output, mask)
+                earlier = self._cbp_activations.get(key)
+                self._cbp_activations[key] = merge_rank_sample(
+                    earlier, sample, _RANK_SAMPLE_ROWS
+                ).clone()
 
         return hook
 
@@ -277,6 +304,32 @@ class CBPLearnerMixin:
         return self._cbp_updates % every == 0
 
     # --- The update path -----------------------------------------------------
+
+    def _uncompiled_update(self, batch, **kwargs):
+        """Mark the training update, so only its forwards are observed.
+
+        RLlib's GAE connector calls `compute_values` on the full train batch,
+        on this Learner's module, before the first minibatch. That is a forward
+        through the critic encoder and used to be merged into minibatch 1's
+        statistics, so the critic's first utility update mostly measured a
+        different, larger batch with pre-update weights (#11). Inference passes
+        are excluded for the same reason.
+
+        `_uncompiled_update` is the narrowest seam that brackets every
+        minibatch's `forward_train` (and the `apply_gradients` that runs CBP
+        after it), so a flag here is exact rather than heuristic.
+        """
+        self._cbp_loss_masks = {
+            module_id: module_batch[Columns.LOSS_MASK]
+            for module_id, module_batch in batch.items()
+            if Columns.LOSS_MASK in module_batch
+        }
+        self._cbp_collecting = True
+        try:
+            return super()._uncompiled_update(batch, **kwargs)
+        finally:
+            self._cbp_collecting = False
+            self._cbp_loss_masks = {}
 
     def apply_gradients(self, gradients_dict) -> None:
         """The optimiser step, then generate-and-test (arXiv Algorithm 3)."""
@@ -298,8 +351,15 @@ class CBPLearnerMixin:
             for layer in layers:
                 stats = self._cbp_stats.pop((module_id, layer.name), None)
                 if stats is None:
-                    # No forward pass observed this layer - an inference-only
-                    # branch, or a module not in this minibatch.
+                    if not self._cbp_distributed_replacement():
+                        # No forward pass observed this layer - an inference-only
+                        # branch, or a module not in this minibatch.
+                        continue
+                    # Every learner must enter the same collectives, so a layer
+                    # this learner did not see contributes zero rows.
+                    stats = zero_stats(layer.num_units, device=layer.device)
+                stats = synchronise_stats(stats)
+                if stats is None:
                     continue
                 state = self._cbp_state[module_id][layer.name]
                 corrected = update_utility(state, layer, stats, self._cbp_config)
@@ -329,6 +389,15 @@ class CBPLearnerMixin:
         # cannot accumulate one entry per such layer for the life of the run.
         self._cbp_activations.clear()
         self._cbp_updates += 1
+
+    def _cbp_distributed_replacement(self) -> bool:
+        """Whether this run must synchronise replacement choices across learners."""
+        return (
+            self._cbp_config.replaces
+            and torch.distributed.is_available()
+            and torch.distributed.is_initialized()
+            and torch.distributed.get_world_size() > 1
+        )
 
     def _cbp_optimizer(self, module_id):
         try:
@@ -405,6 +474,11 @@ class CBPLearnerMixin:
                 }
                 for module_id, layers in self._cbp_state.items()
             }
+            meta = {"updates": getattr(self, "_cbp_updates", 0)}
+            generator = getattr(self, "_cbp_generator", None)
+            if generator is not None:
+                meta["generator_state"] = generator.get_state()
+            state[CBP_STATE][CBP_META] = meta
         return state
 
     def set_state(self, state: Dict[str, Any]) -> None:
@@ -414,11 +488,23 @@ class CBPLearnerMixin:
         this project has already written lacks the key, and a restore is not
         the place to discover that. A layer absent from the checkpoint keeps
         its freshly zeroed state, which is also what a newly enabled CBP wants.
+
+        The generator state and update counter are restored too (#14). Without
+        them a resumed run redraws every replaced unit from the seed, so the
+        replacements after the resume differ from an uninterrupted run, and the
+        metrics cadence restarts. A checkpoint written before those keys existed
+        leaves both untouched, which is the old behaviour.
         """
         super().set_state(state)
         stored = state.get(CBP_STATE)
         if not stored:
             return
+        meta = stored.get(CBP_META) or {}
+        generator = getattr(self, "_cbp_generator", None)
+        if generator is not None and "generator_state" in meta:
+            generator.set_state(meta["generator_state"])
+        if "updates" in meta:
+            self._cbp_updates = int(meta["updates"])
         for module_id, layers in self._cbp_state.items():
             saved = stored.get(str(module_id), {})
             for name, layer_state in layers.items():
