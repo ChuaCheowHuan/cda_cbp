@@ -17,20 +17,12 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SUBMODULE = ROOT / "third_party" / "loss-of-plasticity"
 
-#: The modules this package and its tests import from lop.
-USED = {
-    "lop.utils.AdamGnT": "AdamGnT",
-    "lop.algos.gnt": "GnT",
-    "lop.algos.cbp_linear": "get_layer_bound",
-}
+#: The modules this package and its tests import from lop. Importing each is part of the
+#: byte check below, so a module that stops importing fails there.
+USED = ("lop.utils.AdamGnT", "lop.algos.gnt", "lop.algos.cbp_linear")
 
 
-@pytest.mark.parametrize("module, name", sorted(USED.items()))
-def test_it_is_importable(module, name):
-    assert hasattr(importlib.import_module(module), name)
-
-
-@pytest.mark.parametrize("module", sorted(USED))
+@pytest.mark.parametrize("module", USED)
 def test_the_installed_file_is_the_submodules_unchanged(module):
     """No local copy and no local edit: the bytes are the pinned commit's."""
     if not (SUBMODULE / ".git").exists():
