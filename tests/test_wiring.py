@@ -521,7 +521,9 @@ class TestSeveralLearnersAgree:
                 **TEST_CFG,
                 **cbp(
                     replacement_rate=FIRING["replacement_rate"],
-                    maturity_threshold=FIRING["maturity_threshold"],
+                    # Each learner sees one minibatch per iteration here, so a
+                    # threshold of 1 would leave every unit immature after it.
+                    maturity_threshold=0,
                     metrics_every_n_updates=1,
                 ),
                 "num_learners": 2,
