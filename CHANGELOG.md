@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **A test that could not fail removed.** `tests/test_lop.py` no longer has `test_it_is_importable`, a `hasattr` check that the byte-for-byte test beside it (which imports each module) and every other test already cover.
 - **Optimiser ownership and allocation (#22, #24).** `AdamGnT` is subclassed as `CBPAdamGnT`,
   which keeps the authors' update but builds its beta scalars once per param group instead of
   once per parameter per step. `select_and_replace` also caches the previous eligible count
