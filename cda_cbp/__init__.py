@@ -6,12 +6,20 @@ Installing this package registers it with gym-CDA through the
 `config.py` for the settings and docs/continual_backprop.md for the method.
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
 from gym_continuousDoubleAuction.train.extensions import Extension
 
 from cda_cbp import config
 from cda_cbp.learner import CBPLearnerMixin
 
-__version__ = "0.2.0"
+try:
+    #: The installed distribution's version, so pyproject.toml is the one source.
+    #: gym-CDA records it beside every checkpoint that enables `cbp`; a hardcoded
+    #: copy here would drift from the release it names.
+    __version__ = version("cda-cbp")
+except PackageNotFoundError:  # a source checkout that was never installed
+    __version__ = "0+unknown"
 
 #: Wraps every other extension's Learner mixin, as CBP did inside gym-CDA:
 #: it observes and replaces units after the whole optimiser step.

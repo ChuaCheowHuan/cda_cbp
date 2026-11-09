@@ -1,5 +1,8 @@
 """The package as gym-CDA sees it: discovered, defaulted, validated, composed."""
 
+import tomllib
+from pathlib import Path
+
 import pytest
 from conftest import TEST_CFG, cbp
 
@@ -14,6 +17,18 @@ from cda_cbp.learner import LEGACY_CONFIG_KEY, _as_config
 
 def test_gym_cda_discovers_the_installed_package():
     assert extensions.discover()[NAME] is cda_cbp.EXTENSION
+
+
+def test_the_version_comes_from_the_installed_metadata():
+    """`pyproject.toml` is the one source, so a stale editable install fails here.
+
+    gym-CDA writes `EXTENSION.version` beside every checkpoint that enables
+    `cbp`; a hardcoded second copy could drift from the release it names.
+    """
+    pyproject = tomllib.loads(
+        (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()
+    )
+    assert cda_cbp.__version__ == pyproject["project"]["version"]
 
 
 #: Keys whose `CBPConfig` value is the legacy one on purpose: a checkpoint is
