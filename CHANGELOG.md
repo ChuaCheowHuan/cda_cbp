@@ -4,9 +4,12 @@
 
 - **Optimiser ownership and allocation (#22, #24).** `AdamGnT` is subclassed as `CBPAdamGnT`,
   which keeps the authors' update but builds its beta scalars once per param group instead of
-  once per parameter per step. A replacing run lets the base Learner register first, requires
-  exactly one default `torch.optim.Adam`, replaces it with `CBPAdamGnT`, and raises if a base
-  mixin registered a second optimizer or param group.
+  once per parameter per step. `select_and_replace` also caches the previous eligible count
+  for `arxiv`, so the common step advances its counter without reading the count back from
+  the device; the read happens only when a replacement becomes possible. A replacing run lets
+  the base Learner register first, requires exactly one default `torch.optim.Adam`, replaces
+  it with `CBPAdamGnT`, and raises if a base mixin registered a second optimizer or param
+  group.
 - **Agent fixes (2026-11-09).** #10 (LSTM padding), #11 (GAE pass), #12 (settings types),
   #14 (checkpoint RNG and counter), #19/#20 (CI pins and lint), #25 (version metadata),
   #27 (rank sample), #28 (saturation), #29 (dead check), #30 (CI hardening) and #31

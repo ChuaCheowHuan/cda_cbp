@@ -763,6 +763,12 @@ class CBPLayerState:
     age: torch.Tensor
     accumulator: float = 0.0
     replacements: int = 0
+    #: The eligible count seen on the previous step, when no replacement has
+    #: happened since. Ages only rise until a replacement resets them, so a
+    #: positive value proves the next step still has an eligible unit: `arxiv`
+    #: can then grow its counter (which needs only the layer width) without
+    #: reading the count back from the device (#24).
+    n_eligible_last: int = 0
 
     @classmethod
     def zeros(cls, num_units: int, device=None) -> "CBPLayerState":
@@ -804,6 +810,9 @@ class CBPLayerState:
         self.age = state["age"].to(device).clone()
         self.accumulator = float(state["accumulator"])
         self.replacements = int(state["replacements"])
+        # Not checkpointed: zero forces the first post-resume step to read the
+        # count and rebuild this cache, which is cheaper than another state key.
+        self.n_eligible_last = 0
 
 
 def bias_corrected(value: torch.Tensor, age: torch.Tensor, decay: float) -> torch.Tensor:
@@ -1046,18 +1055,36 @@ def select_and_replace(
     if not config.replaces:
         return []
 
-    eligible = state.age > config.maturity_threshold
-    n_eligible = int(eligible.sum().item())
-    if n_eligible == 0:
-        return []
-    # The paper counts the layer's units; lop and the Nature paper the eligible ones.
-    counted = eligible.numel() if config.count_rule == "arxiv" else n_eligible
-    state.accumulator += counted * config.replacement_rate
+    n_units = state.age.numel()
+    known_eligible = config.count_rule == "arxiv" and state.n_eligible_last > 0
+    if known_eligible:
+        # The previous step had an eligible unit and none has been replaced
+        # since, so there is still one now. `arxiv` grows by the layer width,
+        # which is known without reading the count back from the device.
+        state.accumulator += n_units * config.replacement_rate
+        if state.accumulator < 1.0:
+            return []
+        eligible = state.age > config.maturity_threshold
+        n_eligible = int(eligible.sum().item())
+    else:
+        eligible = state.age > config.maturity_threshold
+        n_eligible = int(eligible.sum().item())
+        if n_eligible == 0:
+            state.n_eligible_last = 0
+            return []
+        # The paper counts the layer's units; lop and the Nature paper the eligible ones.
+        counted = n_units if config.count_rule == "arxiv" else n_eligible
+        state.accumulator += counted * config.replacement_rate
+        if config.count_rule == "arxiv" and state.accumulator < 1.0:
+            state.n_eligible_last = n_eligible
+            return []
+
     if config.count_rule == "nature":
         count = 1 if state.accumulator > 1.0 else 0
     else:
         count = min(int(state.accumulator), n_eligible)
     if count == 0:
+        state.n_eligible_last = n_eligible
         return []
 
     # +inf for ineligible units, so the lowest `count` can only be mature ones.
@@ -1071,6 +1098,7 @@ def select_and_replace(
         _reinitialise(state, layer, index, generator, optimizer, config)
     state.accumulator -= float(count)
     state.replacements += count
+    state.n_eligible_last = 0
     return indices
 
 

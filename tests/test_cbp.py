@@ -448,6 +448,16 @@ class TestAccumulator:
         assert select_and_replace(self.state, self.layer, self.utility, config) == []
         assert self.state.accumulator == 0.0
 
+    def test_a_known_eligible_step_does_not_read_the_count(self):
+        """With `arxiv` and a positive previous count, the common step needs no device read."""
+        state = CBPLayerState.zeros(5, device=torch.device("meta"))
+        state.n_eligible_last = 1
+        config = CBPConfig(
+            enabled=True, count_rule="arxiv", replacement_rate=1e-6, maturity_threshold=0
+        )
+        # `.item()` on a meta tensor raises; the cached path returns before it.
+        assert select_and_replace(state, self.layer, torch.zeros(5), config) == []
+
     def test_metrics_only_never_replaces(self):
         config = CBPConfig(
             enabled=True,
