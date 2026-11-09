@@ -16,8 +16,14 @@ dependencies = ["gym_continuousDoubleAuction>=2.1,<3"]
 
 [project.optional-dependencies]
 # cda-jepa provides the `jepa` encoder once gym-CDA no longer ships it; the tests that
-# use it skip without it (tests/conftest.py, requires_jepa).
-test = ["pytest", "cda-jepa @ git+https://github.com/ChuaCheowHuan/cda_jepa"]
+# use it skip without it (tests/conftest.py, requires_jepa). Pinned to a commit for
+# the same reason GYM_CDA_REF is (docs/development.md); the scheduled CI run moves
+# both to their upstream default branches.
+test = [
+    "pytest",
+    "cda-jepa @ git+https://github.com/ChuaCheowHuan/cda_jepa@dab4583c50b11df08ec84632c705afaec6b338fc",
+]
+dev = ["pytest", "ruff==0.17.4", "pyflakes", "mypy==2.4.1"]
 
 [project.entry-points."gym_cda.extensions"]
 cbp = "cda_cbp:EXTENSION"
@@ -34,6 +40,12 @@ lop = "third_party/loss-of-plasticity/lop"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+# `cbp.py` is the algorithm and is the file CI type-checks. Its dependencies are
+# untyped third-party packages and gym-CDA, hence the ignore.
+files = ["cda_cbp/cbp.py"]
+ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100

@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- **Agent fixes (2026-11-09).** #10 (LSTM padding), #11 (GAE pass), #12 (settings types),
+  #14 (checkpoint RNG and counter), #19/#20 (CI pins and lint), #25 (version metadata),
+  #27 (rank sample), #28 (saturation), #29 (dead check), #30 (CI hardening) and #31
+  (several learners). The human-decision and GPU-measurement issues are untouched.
+- **LSTM padding is excluded from CBP statistics (#10).** The hook applies RLlib's
+  `loss_mask`, for the statistics and the rank sample, so a stateful encoder's zero-padded
+  timesteps are not counted as activations.
+- **The GAE value pass no longer enters the statistics (#11).** Collection is bracketed by
+  `_uncompiled_update`, so the connector's `compute_values` forward is ignored rather than
+  merged into the critic's first utility update.
+- **Settings are type- and range-checked (#12).** `"metrics_only": "false"` and
+  `"replacement_rate": "1e-4"` are refused instead of silently running the wrong
+  experiment; `metrics_every_n_updates >= 1` and `dead_unit_threshold >= 0`.
+  `compensate_mean` with `scope: "recurrent"` warns.
+- **A resume keeps the replacement RNG and the update counter (#14).** Both ride in the
+  checkpoint's CBP block, so the units drawn after a resume match an uninterrupted run and
+  the metrics cadence does not restart.
+- **CI pins both upstream repos and checks lint/types (#19, #20).** `GYM_CDA_REF` and
+  cda-jepa are pinned by commit, a weekly scheduled run tracks `master`/`main`, and a lint
+  job runs `ruff format --check .` and pyflakes while the test job runs mypy. A `dev` extra
+  installs the tools.
+- **The version comes from the installed metadata (#25).** `pyproject.toml`'s version is
+  the one source; the test fails on a stale editable install.
+- **The rank sample merges every call in a step (#27).** A layer that runs more than once
+  (MoE experts, the JEPA trunk) no longer has the effective-rank metric measured on its
+  last call alone.
+- **Saturation is measured only for bounded activations (#28).** Tanh and sigmoid keep the
+  metric; GELU/ReLU layers omit it, so a healthy strongly active GELU unit is not counted
+  as saturated.
+- **The dead "CBP twice" check is gone (#29).** No supported gym-CDA has `cbp_enabled` or
+  `cbp_metrics_only`, and the branch could not run.
+- **CI is hardened (#30).** The workflow has `contents: read`, actions are pinned by SHA,
+  and Dependabot keeps the pins current.
+- **Several learners can replace (#31).** Each layer's statistics are all-reduced across
+  the learner group before the utility update, so every learner ranks and replaces the same
+  units; the config no longer refuses `num_learners > 1`.
 - **Review and tidy-up (2026-11-08).** Five new findings filed (#27-#31); the open review issues
   labelled `agent` or `human`, with #13, #15, #16 and #18 split into sub-issues (#19-#26).
 - **Stale names fixed (#17).** The no-replaceable-layer warning names

@@ -23,9 +23,9 @@ pip install torch==2.13.0 --extra-index-url https://download.pytorch.org/whl/cpu
 pip install "gym_continuousDoubleAuction @ git+https://github.com/ChuaCheowHuan/gym-continuousDoubleAuction"
 git clone --recurse-submodules https://github.com/ChuaCheowHuan/cda_cbp
 cd cda_cbp
-pip install -e ".[test]" ruff pyflakes
+pip install -e ".[test,dev]"
 python -m pytest -q        # about 20 s on CPU
-ruff format --check . && python -m pyflakes cda_cbp tests
+ruff format --check . && python -m pyflakes cda_cbp tests && mypy cda_cbp/cbp.py
 ```
 
 A clone made without `--recurse-submodules` needs `git submodule update --init` before the
@@ -50,9 +50,9 @@ third_party/loss-of-plasticity checkout <sha>`, commit the submodule, and let CI
 
 | File | Covers |
 |---|---|
-| `test_cbp.py` | The algorithm with no Ray and no `Algorithm`: discovery (matching the layers recorded on gym-CDA at f7c1353), utility, replacement, accumulator, determinism, state, metrics, device placement, DDP unwrapping, mean compensation, the learner-count rule |
+| `test_cbp.py` | The algorithm with no Ray and no `Algorithm`: discovery (matching the layers recorded on gym-CDA at f7c1353), utility, replacement, accumulator, determinism, state (including the RNG and update counter), settings types and ranges, metrics (including per-call rank samples and loss masking), device placement, DDP unwrapping, mean compensation, statistics synchronisation for several learners |
 | `test_cbp_recurrent.py` | CBP on an LSTM core under `scope: "recurrent"` |
-| `test_wiring.py` | A real gym-CDA `Algorithm`: composition over the encoder's Learner and outermost, real updates, metrics-only, checkpoint state, a real save and restore, and the resume guards |
+| `test_wiring.py` | A real gym-CDA `Algorithm`: composition over the encoder's Learner and outermost, real updates, metrics-only, checkpoint state (including the RNG and update counter), a real save and restore, and the resume guards |
 | `test_lop_reference.py` | Step by step against the authors' `lop.algos.gnt.GnT` on the same network, data and `AdamGnT`: the same units replaced, ages, utility ranking, network and Adam state (timestep included) |
 | `test_extension.py` | The package as gym-CDA sees it: discovery, defaults (and the two legacy ones), validation through `TrainConfig`, legacy settings |
 | `test_lop.py` | The `lop` modules used import, are the pinned submodule's files unchanged, and `lop.envs` is not installed |
@@ -83,7 +83,14 @@ This package relies on gym-CDA for:
   `CBPLearnerMixin` to this package's, so checkpoints written while CBP was part of gym-CDA
   still load.
 
-The gym-CDA ref CI tests against is `GYM_CDA_REF` in `.github/workflows/cda_cbp.yml`.
+The gym-CDA ref CI tests against is `GYM_CDA_REF` in `.github/workflows/cda_cbp.yml`, pinned to
+a commit (`3ae05e0` at the time of writing) so a green run is reproducible. The `test` extra pins
+cda-jepa to a commit for the same reason. A weekly scheduled run overrides both to gym-CDA
+`master` and cda-jepa `main`, so upstream drift is still caught without turning PRs red. To move a
+pin: run the test suite against the new commit, then replace the SHA in the workflow (or in
+`pyproject.toml` for cda-jepa) and note the new one here. The lint/type gate is a separate CI job
+(`ruff format --check .`, `python -m pyflakes cda_cbp tests`) plus `mypy cda_cbp/cbp.py` in the
+test job; `.[dev]` installs all three locally.
 
 ## Agent skills
 

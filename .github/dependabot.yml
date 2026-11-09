@@ -1,0 +1,8 @@
+version: 2
+updates:
+  # Keep the workflow's action pins current. Dependabot understands the
+  # `# vX.Y.Z` comment beside a SHA and moves both together.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
