@@ -363,6 +363,12 @@ class CBPLearnerMixin:
                     continue
                 state = self._cbp_state[module_id][layer.name]
                 corrected = update_utility(state, layer, stats, self._cbp_config)
+                if self._cbp_distributed_replacement():
+                    # DDP leaves the weights a few ulps apart, and the utility
+                    # multiplies those weights by the shared statistics. On a
+                    # near tie that is enough to rank different units, so rank
+                    # rank 0's utility on every learner before choosing.
+                    torch.distributed.broadcast(corrected, src=0)
                 select_and_replace(
                     state,
                     layer,
