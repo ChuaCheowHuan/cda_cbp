@@ -1132,6 +1132,7 @@ class TestContinualBackpropWithSeveralLearners:
             tensor.add_(others.__next__())
 
         monkeypatch.setattr(distributed, "all_reduce", fake_all_reduce)
+        monkeypatch.setattr(distributed, "broadcast", lambda tensor, src=0: None)
         stats = {
             "mean": torch.tensor([0.5, 1.0]),
             "abs_mean": torch.tensor([1.0, 2.0]),

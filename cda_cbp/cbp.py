@@ -971,6 +971,11 @@ def synchronise_stats(
         weighted = stats[key] * rows
         torch.distributed.all_reduce(weighted, op=torch.distributed.ReduceOp.SUM)
         reduced[key] = weighted / total_rows
+    # The sums above can associate differently on different ranks, which leaves
+    # the utility a few ulps apart and, on a tie, could pick a different unit.
+    # Broadcast rank 0's result so every learner updates exactly the same state.
+    for tensor in (total_rows, reduced["mean"], reduced["abs_mean"], reduced["dev_abs_mean"]):
+        torch.distributed.broadcast(tensor, src=0)
     return reduced
 
 
