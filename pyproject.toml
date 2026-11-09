@@ -43,8 +43,11 @@ testpaths = ["tests"]
 
 [tool.mypy]
 # `cbp.py` is the algorithm and is the file CI type-checks. Its dependencies are
-# untyped third-party packages and gym-CDA, hence the ignore.
+# untyped third-party packages and gym-CDA, hence the ignore. Imports are not
+# followed, so checking this one file does not pull in the mixin's `super()`
+# calls into a base class that does not exist until gym-CDA composes it.
 files = ["cda_cbp/cbp.py"]
+follow_imports = "skip"
 ignore_missing_imports = true
 
 [tool.ruff]
