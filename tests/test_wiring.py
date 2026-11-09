@@ -16,9 +16,11 @@ The claims that only hold once a real `Algorithm` exists:
 """
 
 import shutil
+import sys
 import tempfile
 
 import pytest
+import ray
 import torch
 from conftest import TEST_CFG, cbp, jepa_learner, requires_jepa, with_jepa
 
@@ -498,6 +500,60 @@ class TestCBPSurvivesARealSaveAndRestore:
         learner = self.restored.learner_group._learner
         assert learner._cbp_updates == self.saved_updates
         torch.testing.assert_close(learner._cbp_generator.get_state(), self.saved_generator_state)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="torch.distributed's CPU backend (gloo) is not available on Windows",
+)
+@pytest.mark.usefixtures("ray_session")
+class TestSeveralLearnersAgree:
+    """Replacing with `num_learners: 2` keeps the replicas on the same units (#31).
+
+    The statistics are all-reduced before the utility update, so both learners
+    must hold identical CBP state, update counters and replacement generators
+    after an iteration that actually fires.
+    """
+
+    def test_two_learners_replace_the_same_units(self):
+        config = TrainConfig(
+            **TEST_CFG,
+            **cbp(
+                replacement_rate=FIRING["replacement_rate"],
+                maturity_threshold=FIRING["maturity_threshold"],
+                metrics_every_n_updates=1,
+            ),
+            num_learners=2,
+            num_cpus_per_learner=1,
+        )
+        algo = build_config(config)[0].build_algo()
+        try:
+            algo.train()
+            states = ray.get([w.get_state.remote() for w in algo.learner_group._workers])
+        finally:
+            algo.stop()
+
+        assert len(states) == 2
+        first, second = (state[CBP_STATE] for state in states)
+        assert first[CBP_META]["updates"] == second[CBP_META]["updates"]
+        torch.testing.assert_close(
+            first[CBP_META]["generator_state"], second[CBP_META]["generator_state"]
+        )
+
+        total_replacements = 0
+        for module_id in first:
+            if module_id == CBP_META:
+                continue
+            assert set(first[module_id]) == set(second[module_id])
+            for name in first[module_id]:
+                left, right = first[module_id][name], second[module_id][name]
+                for key in ("utility", "mean_act", "age"):
+                    torch.testing.assert_close(left[key], right[key])
+                assert left["accumulator"] == pytest.approx(right["accumulator"])
+                assert left["replacements"] == right["replacements"]
+                total_replacements += left["replacements"]
+
+        assert total_replacements > 0
 
 
 class TestRestoreCannotChangeCBP:
