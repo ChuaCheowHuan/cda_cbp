@@ -734,11 +734,15 @@ gym-CDA train/model/optim_learner.py  # independent of CBP
   `set_state` so a resume is correct (§3.5).
 - **Optimiser:** Adam moments zeroed for the replaced slices, and with `optimizer: "adam_gnt"` (the
   default for a new run) the per-weight *timestep* too, as Algorithm 2 specifies. That optimiser is
-  the authors' `AdamGnT`, imported from `lop`, which keeps a `step` tensor the shape of each
-  parameter. Stock `torch.optim.Adam` keeps one scalar `step` per tensor, so under
+  `CBPAdamGnT`, a subclass of the authors' `AdamGnT` from `lop` that keeps the same `step` tensor
+  but builds its two beta scalars once per param group instead of once per parameter per step
+  (#24). Stock `torch.optim.Adam` keeps one scalar `step` per tensor, so under
   `optimizer: "torch_adam"` (and every checkpoint from before the setting) the timestep is not
   reset and the new unit's effective step ramps up over ~`1/(1-β₁)` updates instead of being full
   size at once. Documented in `_reset_optimizer_slots`.
+  The base Learner registers first and CBP takes over only its single default `torch.optim.Adam`;
+  a base that adds a second optimizer or param group raises rather than being silently bypassed
+  (#15, #21, #22).
 - **Composition:** applied over the encoder's Learner, so MoE and JEPA terms survive (§2.5). Off
   unless `"cbp"` is in `extensions_enabled`, and when off the composition is skipped entirely so
   the resolved learner class is *identical* to the base — asserted by

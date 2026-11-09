@@ -54,11 +54,13 @@ third_party/loss-of-plasticity checkout <sha>`, commit the submodule, and let CI
 | `test_cbp_recurrent.py` | CBP on an LSTM core under `scope: "recurrent"` |
 | `test_wiring.py` | A real gym-CDA `Algorithm`: composition over the encoder's Learner and outermost, real updates, metrics-only, checkpoint state (including the RNG and update counter), a real save and restore, and the resume guards |
 | `test_lop_reference.py` | Step by step against the authors' `lop.algos.gnt.GnT` on the same network, data and `AdamGnT`: the same units replaced, ages, utility ranking, network and Adam state (timestep included) |
+| `test_adam_gnt_optim.py` | `CBPAdamGnT` matches `AdamGnT` step by step, and builds its beta scalars once per param group rather than once per parameter |
 | `test_extension.py` | The package as gym-CDA sees it: discovery, defaults (and the two legacy ones), validation through `TrainConfig`, legacy settings |
 | `test_lop.py` | The `lop` modules used import, are the pinned submodule's files unchanged, and `lop.envs` is not installed |
 | `test_count_rule.py` | The `arxiv` counter grows by `n_l · ρ` and `lop`'s by the eligible count, both replace every whole unit it holds, a missing `count_rule` means `nature` (whose one-per-step cap is in `test_cbp.py`), and the init bound is `lop`'s `get_layer_bound` |
 | `test_extra_heads.py` | Heads another extension declares in `extra_trunk_heads` are consumers of the trunk's last layer, on MLP and LSTM trunks, and a replacement zeroes the unit in each |
 | `test_adam_gnt.py` | `AdamGnT`'s per-weight timestep is reset with the moments for exactly the replaced slices, torch Adam is left alone, a missing `optimizer` means `torch_adam`, and a real `Algorithm` builds the optimiser asked for |
+| `test_optimizer_ownership.py` | The base registers exactly one default torch Adam; CBP replaces it with `CBPAdamGnT`, and a base that registers a second optimizer is refused (#22) |
 | `test_moved_checks.py` | A check that lived in gym-CDA's suite until CBP moved: the rank metric is gym-CDA's `effective_rank`, with NaN below two rows |
 | `test_docs.py` | The settings table matches `DEFAULTS`, and every relative link resolves |
 
@@ -82,6 +84,13 @@ This package relies on gym-CDA for:
 - `train/model/cbp_learner.py` (after CBP left gym-CDA): a shim that resolves
   `CBPLearnerMixin` to this package's, so checkpoints written while CBP was part of gym-CDA
   still load.
+- `Learner.configure_optimizers_for_module`, `register_optimizer` and
+  `get_optimizers_for_module`, plus the optimizer registry (`_module_optimizers`,
+  `_named_optimizers`, `_optimizer_parameters`, `_optimizer_lr_schedules`). A replacing run with
+  `optimizer: "adam_gnt"` lets the base register first, requires exactly one default
+  `torch.optim.Adam` with one param group, removes it and registers `CBPAdamGnT` over the same
+  parameters (#15, #21 option 3, #22). A second optimizer or param group raises instead of being
+  silently bypassed.
 
 The gym-CDA ref CI tests against is `GYM_CDA_REF` in `.github/workflows/cda_cbp.yml`, pinned to
 a commit (`3ae05e0` at the time of writing) so a green run is reproducible. The `test` extra pins

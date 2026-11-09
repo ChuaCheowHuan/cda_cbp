@@ -41,6 +41,7 @@ import torch.nn as nn
 from lop.algos.gnt import GnT
 from lop.utils.AdamGnT import AdamGnT
 
+from cda_cbp.optim import CBPAdamGnT
 from cda_cbp.cbp import (
     CBPConfig,
     CBPLayerState,
@@ -87,7 +88,7 @@ def _run():
     """Yield, per step, what each implementation replaced and their state."""
     ours, theirs = _net(), _net()
     theirs.load_state_dict(ours.state_dict())
-    our_opt = AdamGnT(ours.parameters(), lr=1e-2)
+    our_opt = CBPAdamGnT(ours.parameters(), lr=1e-2)
     their_opt = AdamGnT(theirs.parameters(), lr=1e-2)
 
     gnt = GnT(

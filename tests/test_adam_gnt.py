@@ -29,6 +29,7 @@ from lop.utils.AdamGnT import AdamGnT
 from gym_continuousDoubleAuction.train.train import TrainConfig, build_config
 
 from cda_cbp import config as cbp_settings
+from cda_cbp.optim import CBPAdamGnT
 from cda_cbp.cbp import (
     CBPConfig,
     CBPLayerState,
@@ -175,7 +176,7 @@ class TestTheLearnerBuildsTheOptimiser:
         optimizers = _optimizers(dict(**cbp(), adam_betas=[0.99, 0.99], adam_weight_decay=1e-4))
         assert optimizers
         for optimizer in optimizers.values():
-            assert type(optimizer) is AdamGnT
+            assert type(optimizer) is CBPAdamGnT
             group = optimizer.param_groups[0]
             assert tuple(group["betas"]) == (0.99, 0.99)
             assert group["weight_decay"] == 1e-4

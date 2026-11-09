@@ -41,14 +41,15 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
-from lop.utils.AdamGnT import AdamGnT
 from ray.rllib.core.columns import Columns
+from ray.rllib.core.learner.learner import DEFAULT_OPTIMIZER
 
 from gym_continuousDoubleAuction.logging_setup import get_logger
 from gym_continuousDoubleAuction.train.extensions import EXTENSIONS_CONFIG_KEY, settings_for
 from gym_continuousDoubleAuction.train.model.optim_learner import adam_settings
 
 from cda_cbp import config as cbp_settings
+from cda_cbp.optim import CBPAdamGnT
 from cda_cbp.cbp import (
     CBPConfig,
     CBPLayerState,
@@ -119,7 +120,7 @@ class CBPLearnerMixin:
     # --- Setup ---------------------------------------------------------------
 
     def configure_optimizers_for_module(self, module_id, config=None) -> None:
-        """`AdamGnT` for a replacing run with `optimizer: "adam_gnt"` (arXiv Algorithm 2).
+        """`CBPAdamGnT` for a replacing run with `optimizer: "adam_gnt"` (arXiv Algorithm 2).
 
         Called inside `build` (and again by RLlib on a restore), before
         `_cbp_config` exists, so the settings are read here. Built from
@@ -129,19 +130,68 @@ class CBPLearnerMixin:
         `metrics_only`, which must not change the trajectory, or a checkpoint
         whose recorded settings predate the key - defers to the Learner below,
         which is tuned Adam or RLlib's own.
+
+        When it does replace, the base is allowed to register first and is then
+        checked, rather than silently bypassed (#15, #21 option 3): it must have
+        registered exactly the default `torch.optim.Adam` with one param group.
+        That optimizer is removed and `CBPAdamGnT` takes its place over the same
+        parameters. A future mixin that adds a second optimizer or param group
+        raises here instead of having its work discarded.
         """
         lcd = getattr(self.config, "learner_config_dict", None)
         cbp_config = _as_config(lcd)
         if not (cbp_config.replaces and cbp_config.optimizer == "adam_gnt"):
             super().configure_optimizers_for_module(module_id, config=config)
             return
+
+        super().configure_optimizers_for_module(module_id, config=config)
+        registered = self.get_optimizers_for_module(module_id)
+        self._cbp_check_base_optimizer(module_id, registered)
+        for name, optimizer in registered:
+            self._optimizer_parameters.pop(optimizer, None)
+            self._named_optimizers.pop(f"{module_id}_{name}", None)
+            self._optimizer_lr_schedules.pop(optimizer, None)
+        self._module_optimizers[module_id].clear()
+
         params = self.get_parameters(self.module[module_id])
         self.register_optimizer(
             module_id=module_id,
-            optimizer=AdamGnT(params, **adam_settings(lcd)),
+            optimizer=CBPAdamGnT(params, **adam_settings(lcd)),
             params=params,
             lr_or_lr_schedule=config.lr,
         )
+
+    @staticmethod
+    def _cbp_check_base_optimizer(module_id, registered) -> None:
+        """Refuse a base that registered anything but its one default Adam.
+
+        This is the optimiser-ownership rule chosen in #21: CBP replaces a
+        replacing run's optimizer, so it must see the optimizer it expects to
+        replace. Registering more than that - a second optimizer, another
+        optimizer name, or several param groups - is a composition this package
+        has not been taught to preserve.
+        """
+        names = [name for name, _optimizer in registered]
+        if len(registered) != 1:
+            raise ValueError(
+                f"module {module_id!r} registered optimizers {names}; continual backprop "
+                "with optimizer='adam_gnt' can only take over the single default "
+                "torch.optim.Adam. Compose the optimiser mixin inside cbp, or use "
+                "optimizer='torch_adam'."
+            )
+        name, optimizer = registered[0]
+        if (
+            name != DEFAULT_OPTIMIZER
+            or type(optimizer) is not torch.optim.Adam
+            or len(optimizer.param_groups) != 1
+        ):
+            raise ValueError(
+                f"module {module_id!r} registered optimizer {name!r} of type "
+                f"{type(optimizer).__name__} with {len(optimizer.param_groups)} param "
+                "group(s); continual backprop with optimizer='adam_gnt' can only take "
+                "over the single default torch.optim.Adam. Compose the optimiser mixin "
+                "inside cbp, or use optimizer='torch_adam'."
+            )
 
     def build(self) -> None:
         super().build()

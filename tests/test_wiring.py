@@ -36,6 +36,7 @@ from gym_continuousDoubleAuction.train.train import (
 from lop.utils.AdamGnT import AdamGnT
 
 from cda_cbp.learner import CBP_META, CBP_STATE, CBPLearnerMixin
+from cda_cbp.optim import CBPAdamGnT
 
 #: The shipped replacement rate fires roughly once per 39 optimiser steps over
 #: 256 units, and a test-length run performs a handful - so at the real value
@@ -133,7 +134,8 @@ class TestCBPRunsInsideARealUpdate:
     def test_replacing_trains_with_adam_gnt(self):
         """The default `optimizer` when units are replaced (arXiv Algorithm 2)."""
         optimizers = self.learner._named_optimizers
-        assert optimizers and all(type(o) is AdamGnT for o in optimizers.values())
+        assert optimizers and all(isinstance(o, AdamGnT) for o in optimizers.values())
+        assert all(type(o) is CBPAdamGnT for o in optimizers.values())
 
     def test_every_trainable_module_got_four_layers(self):
         """Two hidden layers each for the policy and the value network.
