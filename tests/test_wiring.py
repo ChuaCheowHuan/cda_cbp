@@ -525,7 +525,6 @@ class TestSeveralLearnersAgree:
                     metrics_every_n_updates=1,
                 ),
                 "num_learners": 2,
-                "num_cpus_per_learner": 1,
             }
         )
         algo = build_config(config)[0].build_algo()
